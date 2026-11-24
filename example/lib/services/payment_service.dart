@@ -14,15 +14,17 @@ class PaymentService {
 
   static Future<String?> getCheckoutId({
     required String amount,
-    String paymentType = 'DB',
+    String? paymentType = 'DB',
     bool tokenize = false,
     List<String> registrationIds = const [],
   }) async {
+    // paymentType: null + tokenize: true = stand-alone registration (save a
+    // card without paying; see HyperpaySdk.registerCard).
     final body = <String, String>{
       'entityId': entityId,
       'amount': amount,
       'currency': 'SAR',
-      'paymentType': paymentType,
+      if (paymentType != null) 'paymentType': paymentType,
     };
     if (tokenize) body['createRegistration'] = 'true';
     for (var i = 0; i < registrationIds.length; i++) {
@@ -52,8 +54,7 @@ class PaymentService {
     throw Exception('Failed to get checkout ID: $msg');
   }
 
-  static Future<String?> extractAndSaveRegistration(
-      String checkoutId) async {
+  static Future<String?> extractAndSaveRegistration(String checkoutId) async {
     final uri = Uri.parse(
       'https://eu-test.oppwa.com/v1/checkouts/$checkoutId/payment'
       '?entityId=$entityId',

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../saved_cards_screen.dart';
 import '../services/payment_service.dart';
+import 'advanced_screen.dart';
 import '../widgets/custom_ui_bottom_sheet.dart';
 import '../widgets/payment_tile.dart';
 import '../widgets/status_card.dart';
@@ -170,6 +171,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       context,
                       MaterialPageRoute(
                           builder: (_) => const SavedCardsScreen()),
+                    ),
+          ),
+          PaymentTile(
+            icon: Icons.science,
+            title: 'Advanced features',
+            subtitle: 'Options, tokens, registration, validation',
+            onTap: _isLoading
+                ? null
+                : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AdvancedScreen(
+                            amount: _amountController.text.trim()),
+                      ),
                     ),
           ),
           const SizedBox(height: 16),

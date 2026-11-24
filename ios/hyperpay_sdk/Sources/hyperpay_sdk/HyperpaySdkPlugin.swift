@@ -3,12 +3,18 @@ import UIKit
 import SafariServices
 import PassKit
 import OPPWAMobile
+import ipworks3ds_sdk
 
 public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDelegate {
 
     private var channel: FlutterMethodChannel?
+    private var registrar: FlutterPluginRegistrar?
     private var paymentProvider: OPPPaymentProvider?
     private var checkoutProvider: OPPCheckoutProvider?
+    /// Strong reference: `OPPCheckoutProvider.delegate` is weak.
+    private var checkoutDelegate: HyperpayCheckoutDelegate?
+    /// Strong reference: `OPPPaymentProvider.threeDSEventListener` is weak.
+    private var threeDSListener: HyperpayThreeDSListener?
     private var pendingResult: FlutterResult?
     private var pendingResourcePath: String?
     private var safariVC: SFSafariViewController?
@@ -23,6 +29,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         )
         let instance = HyperpaySdkPlugin()
         instance.channel = channel
+        instance.registrar = registrar
         registrar.addMethodCallDelegate(instance, channel: channel)
         // The shopper-result URL (async / 3DS return) arrives through the
         // scene delegate in UIScene apps (the default since Flutter 3.38, and
@@ -42,17 +49,43 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
             handleCheckoutReadyUI(call, result: result)
         case "payCustomUI":
             handlePayCustomUI(call, result: result)
+        case "registerCard":
+            handleRegisterCard(call, result: result)
+        case "payWithToken":
+            handlePayWithToken(call, result: result)
+        case "payStcPay":
+            handlePayStcPay(call, result: result)
+        case "payWithBrand":
+            handlePayWithBrand(call, result: result)
+        case "payGooglePay", "paySamsungPay":
+            result(FlutterError(code: "UNSUPPORTED", message: "\(call.method) is only available on Android", details: nil))
+        case "klarnaCreateSession":
+            handleKlarna(call, result: result, submitPayment: false)
+        case "klarnaSubmitPayment":
+            handleKlarna(call, result: result, submitPayment: true)
+        case "validateCard":
+            handleValidateCard(call, result: result)
         case "payApplePay":
             handlePayApplePay(call, result: result)
         case "payApplePayDynamic":
             handlePayApplePayDynamic(call, result: result)
+        case "isApplePayAvailable":
+            handleIsApplePayAvailable(call, result: result)
         case "requestBinInfo":
             handleRequestBinInfo(call, result: result)
+        case "getCheckoutInfo":
+            handleGetCheckoutInfo(call, result: result)
         case "getPaymentStatus":
             handleGetPaymentStatus(call, result: result)
+        case "getThreeDSWarnings":
+            handleGetThreeDSWarnings(call, result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
+    }
+
+    private static func notInitialized(_ action: String = "making payments") -> FlutterError {
+        return FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before \(action)", details: nil)
     }
 
     // MARK: - Setup
@@ -65,8 +98,33 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         }
 
         let providerMode: OPPProviderMode = mode == "live" ? .live : .test
-        paymentProvider = OPPPaymentProvider(mode: providerMode)
+        let provider = OPPPaymentProvider(mode: providerMode)
+
+        // 3-D Secure config for your-own-UI payments.
+        if let threeDS = HPArgs.map(args["threeDSConfig"]) {
+            let listener = HyperpayThreeDSListener(config: HPThreeDS.config(from: threeDS))
+            threeDSListener = listener
+            provider.threeDSEventListener = listener
+        } else {
+            threeDSListener = nil
+        }
+
+        paymentProvider = provider
         result(nil)
+    }
+
+    // MARK: - Asset images
+
+    /// Flutter asset path → UIImage, or nil (logged) when it isn't bundled.
+    private func image(forAsset asset: String) -> UIImage? {
+        guard let registrar = registrar else { return nil }
+        let key = registrar.lookupKey(forAsset: asset)
+        if let path = Bundle.main.path(forResource: key, ofType: nil),
+           let image = UIImage(contentsOfFile: path) {
+            return image
+        }
+        NSLog("[HyperPay] Flutter asset '%@' not found; ignored", asset)
+        return nil
     }
 
     // MARK: - ReadyUI Checkout
@@ -74,18 +132,28 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
     private func handleCheckoutReadyUI(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let checkoutId = args["checkoutId"] as? String,
-              let brands = args["brands"] as? [String] else {
+              var brands = args["brands"] as? [String] else {
             result(FlutterError(code: "INVALID_ARGS", message: "checkoutId and brands are required", details: nil))
             return
         }
 
         guard let provider = paymentProvider else {
-            result(FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before making payments", details: nil))
+            result(HyperpaySdkPlugin.notInitialized())
             return
         }
 
         let shopperUrl = args["shopperResultUrl"] as? String
         let applePayConfig = args["applePayConfig"] as? [String: Any]
+        let options = HPArgs.map(args["options"]) ?? [:]
+
+        // Apple Pay with an acquirer-decrypted token: use APPLEPAYTKN in place
+        // of APPLEPAY so the Ready-UI submits with that brand.
+        if let brand = HPArgs.string(applePayConfig?["paymentBrand"]),
+           brand != "APPLEPAY",
+           !brands.contains(brand),
+           let index = brands.firstIndex(of: "APPLEPAY") {
+            brands[index] = brand
+        }
 
         // Configure checkout settings
         let checkoutSettings = OPPCheckoutSettings()
@@ -99,26 +167,45 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
 
         // Apple Pay configuration
         if let applePayConfig = applePayConfig {
-            let merchantId = applePayConfig["merchantId"] as? String ?? ""
-            let countryCode = applePayConfig["countryCode"] as? String ?? ""
-            let currencyCode = applePayConfig["currencyCode"] as? String ?? ""
-            let amount = applePayConfig["amount"] as? Double ?? 0.0
-            let companyName = applePayConfig["companyName"] as? String ?? ""
-
-            let paymentRequest = OPPPaymentProvider.paymentRequest(
-                withMerchantIdentifier: merchantId,
-                countryCode: countryCode
+            checkoutSettings.applePayPaymentRequest = HPApplePay.paymentRequest(
+                merchantId: applePayConfig["merchantId"] as? String ?? "",
+                countryCode: applePayConfig["countryCode"] as? String ?? "",
+                currencyCode: applePayConfig["currencyCode"] as? String ?? "",
+                amount: HPArgs.double(applePayConfig["amount"]) ?? 0.0,
+                companyName: applePayConfig["companyName"] as? String ?? "",
+                config: applePayConfig
             )
-            paymentRequest.currencyCode = currencyCode
-            paymentRequest.paymentSummaryItems = [
-                PKPaymentSummaryItem(label: companyName, amount: NSDecimalNumber(value: amount))
-            ]
-            checkoutSettings.applePayPaymentRequest = paymentRequest
         }
 
         // Language
         if let lang = args["lang"] as? String {
             checkoutSettings.language = lang
+        }
+
+        // 3-D Secure
+        if let threeDS = HPArgs.map(args["threeDSConfig"]) {
+            checkoutSettings.threeDSConfig = HPThreeDS.config(from: threeDS)
+        }
+
+        // Checkout options
+        HPCheckoutOptions.apply(options, to: checkoutSettings) { [weak self] asset in
+            self?.image(forAsset: asset)
+        }
+
+        // Theme: style first (it resets the palette), then the legacy
+        // themeColor, then explicit theme keys (which win over themeColor).
+        let theme = checkoutSettings.theme
+        let themeMap = HPArgs.map(options["theme"])
+        if let themeMap = themeMap {
+            HPCheckoutOptions.applyThemeStyle(themeMap, to: theme)
+        }
+        if let color = HPArgs.color(args["themeColor"]) {
+            HPCheckoutOptions.applyThemeColor(color, to: theme)
+        }
+        if let themeMap = themeMap {
+            HPCheckoutOptions.applyTheme(themeMap, to: theme) { [weak self] asset in
+                self?.image(forAsset: asset)
+            }
         }
 
         // Create checkout provider
@@ -127,36 +214,43 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
             checkoutID: checkoutId,
             settings: checkoutSettings
         )
-        checkoutProvider?.delegate = self
+        let delegate = HyperpayCheckoutDelegate(
+            channel: channel,
+            hasBeforeSubmit: HPArgs.bool(args["hasBeforeSubmit"]) ?? false,
+            cardHolderPattern: HPArgs.string(options["cardHolderPattern"]),
+            hasShippingContactHandler: HPArgs.bool(args["hasApplePayShippingContactHandler"]) ?? false,
+            hasShippingMethodHandler: HPArgs.bool(args["hasApplePayShippingMethodHandler"]) ?? false,
+            applePayRequest: checkoutSettings.applePayPaymentRequest
+        )
+        checkoutDelegate = delegate
+        checkoutProvider?.delegate = delegate
 
         pendingResult = result
+        pendingResourcePath = nil
 
-        // Apply theme color if provided
-        if let themeColorNumber = args["themeColor"] as? NSNumber {
-            let themeColorInt = themeColorNumber.uint32Value
-            let alpha = CGFloat((themeColorInt >> 24) & 0xFF) / 255.0
-            let red   = CGFloat((themeColorInt >> 16) & 0xFF) / 255.0
-            let green = CGFloat((themeColorInt >> 8)  & 0xFF) / 255.0
-            let blue  = CGFloat( themeColorInt        & 0xFF) / 255.0
-            let color = UIColor(red: red, green: green, blue: blue, alpha: alpha)
-
-            let theme = checkoutSettings.theme
-            theme.navigationBarBackgroundColor = color
-            theme.confirmationButtonColor = color
-            theme.accentColor = color
-            theme.cellHighlightedBackgroundColor = color
-        }
+        let paymentBrand = HPArgs.string(args["paymentBrand"]).flatMap { $0.isEmpty ? nil : $0 }
 
         // Present checkout
         DispatchQueue.main.async { [weak self] in
-            self?.checkoutProvider?.presentCheckout(
-                forSubmittingTransactionCompletionHandler: { [weak self] (transaction, error) in
-                    self?.handleCheckoutCompletion(transaction: transaction, error: error)
-                },
-                cancelHandler: { [weak self] in
-                    self?.handleCheckoutCancellation()
-                }
-            )
+            let completion: (OPPTransaction?, Error?) -> Void = { [weak self] (transaction, error) in
+                self?.handleCheckoutCompletion(transaction: transaction, error: error)
+            }
+            let cancel: () -> Void = { [weak self] in
+                self?.handleCheckoutCancellation()
+            }
+            if let paymentBrand = paymentBrand {
+                self?.checkoutProvider?.presentCheckout(
+                    withPaymentBrand: paymentBrand,
+                    loadingHandler: nil,
+                    completionHandler: completion,
+                    cancelHandler: cancel
+                )
+            } else {
+                self?.checkoutProvider?.presentCheckout(
+                    forSubmittingTransactionCompletionHandler: completion,
+                    cancelHandler: cancel
+                )
+            }
         }
     }
 
@@ -237,32 +331,19 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
 
     // MARK: - CustomUI Payment
 
-    private func handlePayCustomUI(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: Any],
-              let checkoutId = args["checkoutId"] as? String,
-              let brand = args["brand"] as? String,
+    /// Card params from the payCustomUI / registerCard arguments. `brand` is
+    /// optional: without it the SDK detects the brand from the card number.
+    private func cardParams(_ args: [String: Any]) throws -> OPPCardPaymentParams? {
+        guard let checkoutId = args["checkoutId"] as? String,
               let cardNumber = args["cardNumber"] as? String,
               let holder = args["holder"] as? String,
               let expiryMonth = args["expiryMonth"] as? String,
               let expiryYear = args["expiryYear"] as? String,
               let cvv = args["cvv"] as? String else {
-            result(FlutterError(code: "INVALID_ARGS", message: "All card fields are required", details: nil))
-            return
+            return nil
         }
-
-        guard let provider = paymentProvider else {
-            result(FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before making payments", details: nil))
-            return
-        }
-
-        let tokenize = args["tokenize"] as? Bool ?? false
-        let shopperUrl = args["shopperResultUrl"] as? String
-
-        NSLog("[HyperPay] CustomUI native params: checkoutId=%@, brand=%@, card=%@, holder=%@, expiry=%@/%@, cvv=%@, tokenize=%d, shopperUrl=%@",
-              checkoutId, brand, cardNumber, holder, expiryMonth, expiryYear, cvv, tokenize ? 1 : 0, shopperUrl ?? "nil")
-
-        do {
-            let paymentParams = try OPPCardPaymentParams(
+        if let brand = args["brand"] as? String, !brand.isEmpty {
+            return try OPPCardPaymentParams(
                 checkoutID: checkoutId,
                 paymentBrand: brand,
                 holder: holder,
@@ -271,50 +352,60 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
                 expiryYear: expiryYear,
                 cvv: cvv
             )
-            NSLog("[HyperPay] OPPCardPaymentParams created successfully")
+        }
+        return try OPPCardPaymentParams(
+            checkoutID: checkoutId,
+            holder: holder,
+            number: cardNumber,
+            expiryMonth: expiryMonth,
+            expiryYear: expiryYear,
+            cvv: cvv
+        )
+    }
 
+    private func handlePayCustomUI(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        handleCardTransaction(call, result: result, register: false)
+    }
+
+    private func handleRegisterCard(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        handleCardTransaction(call, result: result, register: true)
+    }
+
+    private func handleCardTransaction(_ call: FlutterMethodCall, result: @escaping FlutterResult, register: Bool) {
+        guard let args = call.arguments as? [String: Any] else {
+            result(FlutterError(code: "INVALID_ARGS", message: "All card fields are required", details: nil))
+            return
+        }
+
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized())
+            return
+        }
+
+        do {
+            guard let paymentParams = try cardParams(args) else {
+                result(FlutterError(code: "INVALID_ARGS", message: "All card fields are required", details: nil))
+                return
+            }
+
+            let tokenize = !register && (args["tokenize"] as? Bool ?? false)
             if tokenize {
                 paymentParams.isTokenizationEnabled = true
             }
 
-            if let shopperUrl = shopperUrl {
-                paymentParams.shopperResultURL = "\(shopperUrl)://callback"
-                self.shopperResultUrl = shopperUrl
-            }
+            NSLog("[HyperPay] %@ native params: brand=%@, card=****%@, tokenize=%d",
+                  register ? "registerCard" : "CustomUI",
+                  paymentParams.paymentBrand,
+                  String(paymentParams.number.suffix(4)),
+                  tokenize ? 1 : 0)
 
-            let transaction = OPPTransaction(paymentParams: paymentParams)
-
-            pendingResult = result
-
-            NSLog("[HyperPay] Submitting transaction to provider...")
-
-            provider.submitTransaction(transaction) { [weak self] (transaction, error) in
-                guard let self = self, let pending = self.pendingResult else { return }
-
-                if let error = error as NSError? {
-                    self.pendingResult = nil
-                    pending(self.transactionErrorResult(error))
-                    return
-                }
-
-                if transaction.type == .synchronous {
-                    self.pendingResult = nil
-                    pending([
-                        "isSuccess": true,
-                        "isCanceled": false,
-                        "resourcePath": transaction.resourcePath ?? "",
-                        "transactionType": "sync",
-                    ] as [String: Any])
-                } else {
-                    // Async — keep pendingResult alive, wait for URL scheme callback
-                    self.pendingResourcePath = transaction.resourcePath
-                    if let redirectUrl = transaction.redirectURL {
-                        DispatchQueue.main.async {
-                            self.openSafariVC(url: redirectUrl)
-                        }
-                    }
-                }
-            }
+            submitTransaction(
+                paymentParams,
+                provider: provider,
+                shopperUrl: args["shopperResultUrl"] as? String,
+                register: register,
+                result: result
+            )
         } catch {
             NSLog("[HyperPay] OPPCardPaymentParams creation failed: %@", error.localizedDescription)
             result(FlutterError(
@@ -325,7 +416,262 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         }
     }
 
+    private func handlePayWithToken(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let checkoutId = args["checkoutId"] as? String,
+              let tokenId = args["tokenId"] as? String,
+              let brand = args["brand"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "checkoutId, tokenId and brand are required", details: nil))
+            return
+        }
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized())
+            return
+        }
+        do {
+            let params: OPPTokenPaymentParams
+            if let cvv = args["cvv"] as? String, !cvv.isEmpty {
+                params = try OPPTokenPaymentParams(checkoutID: checkoutId, tokenID: tokenId, cardPaymentBrand: brand, cvv: cvv)
+            } else {
+                params = try OPPTokenPaymentParams(checkoutID: checkoutId, tokenID: tokenId, paymentBrand: brand)
+            }
+            submitTransaction(params, provider: provider, shopperUrl: args["shopperResultUrl"] as? String, result: result)
+        } catch {
+            result(FlutterError(code: "PAYMENT_ERROR", message: error.localizedDescription, details: nil))
+        }
+    }
+
+    private func handlePayStcPay(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let checkoutId = args["checkoutId"] as? String,
+              let option = args["verificationOption"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "checkoutId and verificationOption are required", details: nil))
+            return
+        }
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized())
+            return
+        }
+        do {
+            let params = try OPPSTCPayPaymentParams(
+                checkoutID: checkoutId,
+                verificationOption: option == "qrCode" ? .qrCode : .phone
+            )
+            if let phone = args["mobilePhone"] as? String, !phone.isEmpty {
+                params.phoneNumber = phone
+            }
+            submitTransaction(params, provider: provider, shopperUrl: args["shopperResultUrl"] as? String, result: result)
+        } catch {
+            result(FlutterError(code: "PAYMENT_ERROR", message: error.localizedDescription, details: nil))
+        }
+    }
+
+    private func handlePayWithBrand(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let checkoutId = args["checkoutId"] as? String,
+              let brand = args["brand"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "checkoutId and brand are required", details: nil))
+            return
+        }
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized())
+            return
+        }
+        do {
+            let params = try OPPPaymentParams(checkoutID: checkoutId, paymentBrand: brand)
+            if let parameters = HPArgs.stringMap(args["parameters"]) {
+                for (name, value) in parameters where !params.addParam(withName: name, value: value) {
+                    NSLog("[HyperPay] payWithBrand: parameter '%@' rejected by the SDK", name)
+                }
+            }
+            submitTransaction(params, provider: provider, shopperUrl: args["shopperResultUrl"] as? String, result: result)
+        } catch {
+            result(FlutterError(code: "PAYMENT_ERROR", message: error.localizedDescription, details: nil))
+        }
+    }
+
+    /// The single your-own-UI submit path: sync → result now; async → open
+    /// the redirect in Safari and resolve on the shopper-result URL callback.
+    private func submitTransaction(
+        _ paymentParams: OPPPaymentParams,
+        provider: OPPPaymentProvider,
+        shopperUrl: String?,
+        register: Bool = false,
+        result: @escaping FlutterResult
+    ) {
+        if let shopperUrl = shopperUrl {
+            paymentParams.shopperResultURL = "\(shopperUrl)://callback"
+            self.shopperResultUrl = shopperUrl
+        }
+
+        let transaction = OPPTransaction(paymentParams: paymentParams)
+
+        pendingResult = result
+        pendingResourcePath = nil
+        // A Ready-UI checkout from an earlier call must not be "dismissed" when
+        // this payment's shopper-result URL arrives.
+        checkoutProvider = nil
+        checkoutDelegate = nil
+
+        NSLog("[HyperPay] %@ transaction to provider...", register ? "Registering" : "Submitting")
+
+        let completion: (OPPTransaction, Error?) -> Void = { [weak self] (transaction, error) in
+            guard let self = self, let pending = self.pendingResult else { return }
+
+            if let error = error as NSError? {
+                self.pendingResult = nil
+                pending(self.transactionErrorResult(error))
+                return
+            }
+
+            if transaction.type == .synchronous {
+                self.pendingResult = nil
+                pending([
+                    "isSuccess": true,
+                    "isCanceled": false,
+                    "resourcePath": transaction.resourcePath ?? "",
+                    "transactionType": "sync",
+                ] as [String: Any])
+            } else {
+                // Async — keep pendingResult alive, wait for URL scheme callback
+                self.pendingResourcePath = transaction.resourcePath
+                if let redirectUrl = transaction.redirectURL {
+                    DispatchQueue.main.async {
+                        self.openSafariVC(url: redirectUrl)
+                    }
+                }
+            }
+        }
+
+        if register {
+            provider.register(transaction, completionHandler: completion)
+        } else {
+            provider.submitTransaction(transaction, completionHandler: completion)
+        }
+    }
+
+    // MARK: - Klarna Payments (native inline flow)
+
+    private func handleKlarna(_ call: FlutterMethodCall, result: @escaping FlutterResult, submitPayment: Bool) {
+        guard let args = call.arguments as? [String: Any],
+              let checkoutId = args["checkoutId"] as? String,
+              let brand = args["brand"] as? String,
+              let shopperUrl = args["shopperResultUrl"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "checkoutId, brand and shopperResultUrl are required", details: nil))
+            return
+        }
+        let initialTransactionId = args["initialTransactionId"] as? String
+        if submitPayment && (initialTransactionId?.isEmpty ?? true) {
+            result(FlutterError(code: "INVALID_ARGS", message: "initialTransactionId is required", details: nil))
+            return
+        }
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized())
+            return
+        }
+
+        let params: OPPKlarnaInlinePaymentParams
+        do {
+            params = try OPPKlarnaInlinePaymentParams(checkoutID: checkoutId, paymentBrand: brand)
+        } catch {
+            result(FlutterError(code: "KLARNA_ERROR", message: error.localizedDescription, details: nil))
+            return
+        }
+        params.shopperResultURL = "\(shopperUrl)://callback"
+        if submitPayment {
+            params.initialTransactionId = initialTransactionId
+        }
+
+        provider.submitTransaction(OPPTransaction(paymentParams: params)) { transaction, error in
+            DispatchQueue.main.async {
+                if let error = error as NSError? {
+                    result(FlutterError(
+                        code: "KLARNA_ERROR",
+                        message: error.localizedDescription,
+                        details: "domain=\(error.domain), code=\(error.code)"
+                    ))
+                    return
+                }
+                let info = transaction.brandSpecificInfo ?? [:]
+                var session: [String: Any] = [:]
+                session["clientToken"] = info[OPPTransactionKlarnaInlineClientTokenKey]
+                session["initialTransactionId"] = info[OPPTransactionKlarnaInlineInitialTransactionIdKey]
+                    ?? initialTransactionId
+                session["callbackUrl"] = info[OPPTransactionKlarnaInlineClientCallbackUrlKey]
+                session["failureCallbackUrl"] = info[OPPTransactionKlarnaInlineClientFailureCallbackUrlKey]
+                session["paymentCategory"] = HyperpaySdkPlugin.klarnaPaymentCategory(brand)
+                result(session)
+            }
+        }
+    }
+
+    private static func klarnaPaymentCategory(_ brand: String) -> String? {
+        let upper = brand.uppercased()
+        if upper.hasSuffix("PAYLATER") { return "pay_later" }
+        if upper.hasSuffix("SLICEIT") { return "pay_over_time" }
+        if upper.hasSuffix("PAYNOW") { return "pay_now" }
+        if upper.hasSuffix("ONE") { return "klarna" }
+        return nil
+    }
+
+    // MARK: - Card validation
+
+    private func handleValidateCard(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let args = call.arguments as? [String: Any] ?? [:]
+        let luhnCheck = HPArgs.bool(args["luhnCheck"]) ?? true
+        var out: [String: Any] = [:]
+
+        if let number = args["number"] as? String {
+            out["numberValid"] = OPPCardPaymentParams.isNumberValid(number, luhnCheck: luhnCheck)
+        }
+        if let holder = args["holder"] as? String {
+            out["holderValid"] = OPPCardPaymentParams.isHolderValid(holder)
+        }
+        let month = args["expiryMonth"] as? String
+        let year = args["expiryYear"] as? String
+        var monthValid = false
+        var yearValid = false
+        if let month = month {
+            monthValid = OPPCardPaymentParams.isExpiryMonthValid(month)
+            out["expiryMonthValid"] = monthValid
+        }
+        if let year = year {
+            yearValid = OPPCardPaymentParams.isExpiryYearValid(year)
+            out["expiryYearValid"] = yearValid
+        }
+        // Only meaningful (and only safe to hand the SDK) for a valid month/year.
+        if let month = month, let year = year, monthValid, yearValid {
+            out["expired"] = OPPCardPaymentParams.isExpired(month, and: year)
+        }
+        if let cvv = args["cvv"] as? String {
+            if let brand = args["brand"] as? String, !brand.isEmpty {
+                let length = OPPCardValidator.cvvLength(forPaymentBrand: brand)
+                let digitsOnly = !cvv.isEmpty && cvv.allSatisfy { $0 >= "0" && $0 <= "9" }
+                out["cvvValid"] = digitsOnly && cvv.count == length
+            } else {
+                out["cvvValid"] = OPPBaseCardPaymentParams.isCvvValid(cvv)
+            }
+        }
+        result(out)
+    }
+
     // MARK: - Apple Pay
+
+    private static let applePayUnavailableResult: [String: Any] = [
+        "isSuccess": false,
+        "isCanceled": false,
+        "errorCode": "APPLE_PAY_UNAVAILABLE",
+        "errorMessage": "Apple Pay is not available on this device (no entitlement, no payment-processing certificate, or no eligible cards in Wallet).",
+    ]
+
+    private func handleIsApplePayAvailable(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        let args = call.arguments as? [String: Any]
+        var available = OPPPaymentProvider.deviceSupportsApplePay()
+        if available, let networks = HPApplePay.networks(args?["networks"]) {
+            available = PKPaymentAuthorizationController.canMakePayments(usingNetworks: networks)
+        }
+        result(available)
+    }
 
     private func handlePayApplePay(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
@@ -333,7 +679,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
               let merchantId = args["merchantId"] as? String,
               let countryCode = args["countryCode"] as? String,
               let currencyCode = args["currencyCode"] as? String,
-              let amount = args["amount"] as? Double,
+              let amount = HPArgs.double(args["amount"]),
               let companyName = args["companyName"] as? String,
               let shopperUrl = args["shopperResultUrl"] as? String else {
             result(FlutterError(code: "INVALID_ARGS", message: "All Apple Pay fields are required", details: nil))
@@ -346,7 +692,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         self.shopperResultUrl = shopperUrl
 
         guard let provider = paymentProvider else {
-            result(FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before making payments", details: nil))
+            result(HyperpaySdkPlugin.notInitialized())
             return
         }
 
@@ -355,23 +701,19 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         // guard PassKit will hard-abort the process via abort_with_payload
         // when the merchant ID isn't entitled.
         guard PKPaymentAuthorizationViewController.canMakePayments() else {
-            result([
-                "isSuccess": false,
-                "isCanceled": false,
-                "errorCode": "APPLE_PAY_UNAVAILABLE",
-                "errorMessage": "Apple Pay is not available on this device (no entitlement, no payment-processing certificate, or no eligible cards in Wallet).",
-            ] as [String: Any])
+            result(HyperpaySdkPlugin.applePayUnavailableResult)
             return
         }
 
-        let paymentRequest = OPPPaymentProvider.paymentRequest(
-            withMerchantIdentifier: merchantId,
-            countryCode: countryCode
+        let paymentRequest = HPApplePay.paymentRequest(
+            merchantId: merchantId,
+            countryCode: countryCode,
+            currencyCode: currencyCode,
+            amount: amount,
+            companyName: companyName,
+            config: args
         )
-        paymentRequest.currencyCode = currencyCode
-        paymentRequest.paymentSummaryItems = [
-            PKPaymentSummaryItem(label: companyName, amount: NSDecimalNumber(value: amount))
-        ]
+        let brand = HPArgs.string(args["paymentBrand"]).flatMap { $0.isEmpty ? nil : $0 } ?? "APPLEPAY"
 
         do {
             // Validates the checkout ID up front. The Apple Pay token only exists
@@ -379,23 +721,26 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
             // tokenData) is built in paymentAuthorizationViewController(_:didAuthorizePayment:).
             let params = try OPPPaymentParams(
                 checkoutID: checkoutId,
-                paymentBrand: "APPLEPAY"
+                paymentBrand: brand
             )
 
             pendingResult = result
             applePaySubmissionInFlight = false
+            pendingApplePayBrand = brand
+            pendingApplePaySubmitContacts = HPArgs.bool(args["submitContacts"]) ?? false
 
             // Present Apple Pay
-            if let rootVC = self.rootViewController() {
-                let applePayController = PKPaymentAuthorizationViewController(paymentRequest: paymentRequest)
-                applePayController?.delegate = self
+            if let rootVC = self.rootViewController(),
+               let applePayController = PKPaymentAuthorizationViewController(paymentRequest: paymentRequest) {
+                applePayController.delegate = self
 
-                rootVC.present(applePayController!, animated: true) {
+                rootVC.present(applePayController, animated: true) {
                     // Store params for submission after Apple Pay authorization
                     self.pendingApplePayParams = params
                     self.pendingApplePayProvider = provider
                 }
             } else {
+                pendingResult = nil
                 result(FlutterError(code: "NO_VIEW_CONTROLLER", message: "Cannot present Apple Pay", details: nil))
             }
         } catch {
@@ -410,6 +755,10 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
     private var pendingApplePayParams: OPPPaymentParams?
     private var pendingApplePayProvider: OPPPaymentProvider?
     private var pendingApplePayDynamic: Bool = false
+    /// Payment brand to submit the Apple Pay token with (APPLEPAY / APPLEPAYTKN).
+    private var pendingApplePayBrand: String = "APPLEPAY"
+    /// Send the Apple Pay billing / shipping contacts to HyperPay.
+    private var pendingApplePaySubmitContacts: Bool = false
     /// True from the moment Apple Pay hands us an authorized token until the
     /// HyperPay submission (or the checkout resolution that precedes it) has
     /// resolved `pendingResult`. While set, the sheet closing is NOT a
@@ -418,6 +767,34 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
     /// leave `pendingResult` for the submit completion to resolve.
     private var applePaySubmissionInFlight: Bool = false
 
+    /// OPPApplePayPaymentParams for an authorized payment, with the configured
+    /// brand and (when requested) the shopper's contacts.
+    private func applePayParams(checkoutId: String, payment: PKPayment) throws -> OPPApplePayPaymentParams {
+        let params: OPPApplePayPaymentParams
+        if pendingApplePaySubmitContacts {
+            params = try OPPApplePayPaymentParams(
+                checkoutID: checkoutId,
+                paymentBrand: pendingApplePayBrand,
+                tokenData: payment.token.paymentData,
+                billingContact: payment.billingContact,
+                shippingContact: payment.shippingContact
+            )
+        } else {
+            params = try OPPApplePayPaymentParams(
+                checkoutID: checkoutId,
+                paymentBrand: pendingApplePayBrand,
+                tokenData: payment.token.paymentData
+            )
+        }
+        // HyperPay requires shopperResultURL on payment submission. Card flows
+        // set it on OPPCardPaymentParams; the Apple Pay flow was missing it,
+        // causing "200.300.404 invalid or missing parameter" rejections.
+        if let shopperUrl = self.shopperResultUrl {
+            params.shopperResultURL = "\(shopperUrl)://callback"
+        }
+        return params
+    }
+
     // MARK: - Apple Pay (Dynamic — checkout chosen after card network is known)
 
     private func handlePayApplePayDynamic(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -425,7 +802,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
               let merchantId = args["merchantId"] as? String,
               let countryCode = args["countryCode"] as? String,
               let currencyCode = args["currencyCode"] as? String,
-              let amount = args["amount"] as? Double,
+              let amount = HPArgs.double(args["amount"]),
               let companyName = args["companyName"] as? String,
               let shopperUrl = args["shopperResultUrl"] as? String else {
             result(FlutterError(code: "INVALID_ARGS", message: "All Apple Pay fields are required", details: nil))
@@ -435,7 +812,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         self.shopperResultUrl = shopperUrl
 
         guard let provider = paymentProvider else {
-            result(FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before making payments", details: nil))
+            result(HyperpaySdkPlugin.notInitialized())
             return
         }
 
@@ -443,38 +820,37 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         // can abort_with_payload the process when the merchant ID isn't
         // entitled, killing the host app instead of returning an error.
         guard PKPaymentAuthorizationViewController.canMakePayments() else {
-            result([
-                "isSuccess": false,
-                "isCanceled": false,
-                "errorCode": "APPLE_PAY_UNAVAILABLE",
-                "errorMessage": "Apple Pay is not available on this device (no entitlement, no payment-processing certificate, or no eligible cards in Wallet).",
-            ] as [String: Any])
+            result(HyperpaySdkPlugin.applePayUnavailableResult)
             return
         }
 
-        let paymentRequest = OPPPaymentProvider.paymentRequest(
-            withMerchantIdentifier: merchantId,
-            countryCode: countryCode
+        let paymentRequest = HPApplePay.paymentRequest(
+            merchantId: merchantId,
+            countryCode: countryCode,
+            currencyCode: currencyCode,
+            amount: amount,
+            companyName: companyName,
+            config: args
         )
-        paymentRequest.currencyCode = currencyCode
-        paymentRequest.paymentSummaryItems = [
-            PKPaymentSummaryItem(label: companyName, amount: NSDecimalNumber(value: amount))
-        ]
 
-        // Make sure MADA cards appear in the wallet picker. HyperPay's default
-        // supportedNetworks may omit it.
-        var networks = paymentRequest.supportedNetworks
-        if #available(iOS 14.5, *), !networks.contains(.mada) {
-            networks.append(.mada)
+        // Unless the app chose the networks: make sure MADA cards appear in the
+        // wallet picker. HyperPay's default supportedNetworks may omit it.
+        if HPApplePay.networks(args["supportedNetworks"]) == nil {
+            var networks = paymentRequest.supportedNetworks
+            if #available(iOS 14.5, *), !networks.contains(.mada) {
+                networks.append(.mada)
+            }
+            if !networks.contains(.visa) { networks.append(.visa) }
+            if !networks.contains(.masterCard) { networks.append(.masterCard) }
+            paymentRequest.supportedNetworks = networks
         }
-        if !networks.contains(.visa) { networks.append(.visa) }
-        if !networks.contains(.masterCard) { networks.append(.masterCard) }
-        paymentRequest.supportedNetworks = networks
 
         pendingResult = result
         pendingApplePayProvider = provider
         pendingApplePayDynamic = true
         applePaySubmissionInFlight = false
+        pendingApplePayBrand = HPArgs.string(args["paymentBrand"]).flatMap { $0.isEmpty ? nil : $0 } ?? "APPLEPAY"
+        pendingApplePaySubmitContacts = HPArgs.bool(args["submitContacts"]) ?? false
 
         if let rootVC = self.rootViewController(),
            let applePayController = PKPaymentAuthorizationViewController(paymentRequest: paymentRequest) {
@@ -528,7 +904,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         }
 
         guard let provider = paymentProvider else {
-            result(FlutterError(code: "NOT_INITIALIZED", message: "Call setup() before requesting BIN info", details: nil))
+            result(HyperpaySdkPlugin.notInitialized("requesting BIN info"))
             return
         }
 
@@ -559,17 +935,127 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
         }
     }
 
-    // MARK: - Payment Status
+    // MARK: - Checkout info / Payment Status
+
+    private static func tokenMap(_ token: OPPToken) -> [String: Any] {
+        var map: [String: Any] = [
+            "tokenId": token.tokenID,
+            "paymentBrand": token.paymentBrand,
+        ]
+        if let card = token.card {
+            map["cardHolder"] = card.holder
+            map["cardLast4Digits"] = card.last4Digits
+            map["cardExpiryMonth"] = card.expiryMonth
+            map["cardExpiryYear"] = card.expiryYear
+        }
+        if let account = token.bankAccount {
+            map["bankAccountHolder"] = account.holder
+            map["iban"] = account.iban
+        }
+        if let virtual = token.virtualAccount {
+            map["virtualAccountId"] = virtual.accountId
+            if let holder = virtual.holder { map["virtualAccountHolder"] = holder }
+        }
+        return map
+    }
+
+    private static func checkoutInfoMap(_ info: OPPCheckoutInfo) -> [String: Any] {
+        return [
+            "amount": info.amount.doubleValue,
+            "currencyCode": info.currencyCode,
+            "resourcePath": info.resourcePath,
+            "tokens": (info.tokens ?? []).map { tokenMap($0) },
+        ]
+    }
+
+    private func handleGetCheckoutInfo(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let checkoutId = args["checkoutId"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "checkoutId is required", details: nil))
+            return
+        }
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized("requesting checkout info"))
+            return
+        }
+        provider.requestCheckoutInfo(withCheckoutID: checkoutId) { info, error in
+            DispatchQueue.main.async {
+                if let error = error as NSError? {
+                    result(FlutterError(
+                        code: "CHECKOUT_INFO_ERROR",
+                        message: error.localizedDescription,
+                        details: "domain=\(error.domain), code=\(error.code)"
+                    ))
+                    return
+                }
+                guard let info = info else {
+                    result(FlutterError(code: "CHECKOUT_INFO_ERROR", message: "No checkout info returned", details: nil))
+                    return
+                }
+                result(HyperpaySdkPlugin.checkoutInfoMap(info))
+            }
+        }
+    }
 
     private func handleGetPaymentStatus(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         let args = call.arguments as? [String: Any]
         let resourcePath = args?["resourcePath"] as? String
 
         // Payment status verification should be done server-side.
-        result([
+        let base: [String: Any] = [
             "status": "PENDING_SERVER_VERIFICATION",
             "resourcePath": resourcePath as Any,
-        ] as [String: Any])
+        ]
+
+        // Enrich with the checkout details when we can; never fail on it.
+        guard let provider = paymentProvider,
+              let checkoutId = args?["checkoutId"] as? String,
+              !checkoutId.isEmpty else {
+            result(base)
+            return
+        }
+        provider.requestCheckoutInfo(withCheckoutID: checkoutId) { info, _ in
+            DispatchQueue.main.async {
+                guard let info = info else {
+                    result(base)
+                    return
+                }
+                var map = HyperpaySdkPlugin.checkoutInfoMap(info)
+                map["status"] = "PENDING_SERVER_VERIFICATION"
+                if let resourcePath = resourcePath {
+                    map["resourcePath"] = resourcePath
+                }
+                result(map)
+            }
+        }
+    }
+
+    // MARK: - 3DS warnings
+
+    private func handleGetThreeDSWarnings(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let provider = paymentProvider else {
+            result(HyperpaySdkPlugin.notInitialized("requesting 3DS warnings"))
+            return
+        }
+        provider.securityWarnings { warnings, error in
+            DispatchQueue.main.async {
+                if let error = error as NSError? {
+                    result(FlutterError(
+                        code: "THREE_DS_WARNINGS_ERROR",
+                        message: error.localizedDescription,
+                        details: "domain=\(error.domain), code=\(error.code)"
+                    ))
+                    return
+                }
+                result((warnings ?? []).map { warning -> [String: Any] in
+                    [
+                        "id": warning.getID(),
+                        "message": warning.getMessage(),
+                        "severity": HPThreeDS.severityName(warning.getSeverity()),
+                    ]
+                })
+            }
+        }
     }
 
     // MARK: - Safari VC for Async Payments
@@ -655,14 +1141,6 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
     }
 }
 
-// MARK: - OPPCheckoutProviderDelegate
-
-// All requirements are optional. Don't implement
-// checkoutProvider(_:continueSubmitting:completion:) unless you need to
-// re-create the checkout or abort: once implemented, the SDK waits for its
-// completion(checkoutID, abort) before every submission.
-extension HyperpaySdkPlugin: OPPCheckoutProviderDelegate {}
-
 // MARK: - SFSafariViewControllerDelegate
 
 extension HyperpaySdkPlugin: SFSafariViewControllerDelegate {
@@ -742,14 +1220,7 @@ extension HyperpaySdkPlugin: PKPaymentAuthorizationViewControllerDelegate {
                 }
 
                 do {
-                    let finalParams = try OPPApplePayPaymentParams(
-                        checkoutID: checkoutId,
-                        paymentBrand: "APPLEPAY",
-                        tokenData: payment.token.paymentData
-                    )
-                    if let shopperUrl = self.shopperResultUrl {
-                        finalParams.shopperResultURL = "\(shopperUrl)://callback"
-                    }
+                    let finalParams = try self.applePayParams(checkoutId: checkoutId, payment: payment)
                     let transaction = OPPTransaction(paymentParams: finalParams)
                     provider.submitTransaction(transaction) { [weak self] (transaction, error) in
                         guard let self = self else { return }
@@ -775,21 +1246,9 @@ extension HyperpaySdkPlugin: PKPaymentAuthorizationViewControllerDelegate {
             return
         }
 
-        let paramsWithToken = try? OPPApplePayPaymentParams(
-            checkoutID: params.checkoutID,
-            paymentBrand: "APPLEPAY",
-            tokenData: payment.token.paymentData
-        )
-        guard let finalParams = paramsWithToken else {
+        guard let finalParams = try? applePayParams(checkoutId: params.checkoutID, payment: payment) else {
             completion(PKPaymentAuthorizationResult(status: .failure, errors: nil))
             return
-        }
-
-        // HyperPay requires shopperResultURL on payment submission. Card flows
-        // set it on OPPCardPaymentParams; the Apple Pay flow was missing it,
-        // causing "200.300.404 invalid or missing parameter" rejections.
-        if let shopperUrl = self.shopperResultUrl {
-            finalParams.shopperResultURL = "\(shopperUrl)://callback"
         }
 
         let transaction = OPPTransaction(paymentParams: finalParams)
