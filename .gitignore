@@ -90,3 +90,7 @@ app.*.symbols
 # Uncomment the lines below if you do NOT want to track SDK binaries in git:
 # android/libs/*.aar
 # ios/Frameworks/*.xcframework
+
+# Swift Package Manager
+.build/
+.swiftpm/
