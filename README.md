@@ -7,13 +7,15 @@ Flutter plugin wrapping the official **HyperPay (OPPWA) Mobile SDK v7.11.0** for
 
 ## Features
 
-- **ReadyUI** — Pre-built checkout screen with all payment brands
-- **CustomUI** — Build your own payment form, submit via the SDK
-- **Apple Pay** (iOS) and **Google Pay** (Android)
-- **VISA, MasterCard, MADA, STC Pay** support
-- **Tokenization** — Save cards for future payments
-- **3DS2 authentication** — Handled automatically by the SDK
-- **Async payment flows** — Redirect-based payments (e.g. 3DS, bank redirects)
+- **ReadyUI** — Pre-built checkout screen with all payment brands, every `CheckoutSettings` option (store-card mode, skip CVV, billing address, installments, brand detection, device-auth security policies, card scanning, custom logos, full iOS theme), single-brand checkout ("payment button"), and a before-submit callback
+- **CustomUI** — Your own forms: cards (with or without brand), stored-card tokens, card registration without payment, STC Pay, Google Pay, Samsung Pay, native Klarna, and any other brand by name
+- **Apple Pay** (iOS) — Ready-UI and your own button, dynamic checkout per card network, shipping contact/method updates, billing/shipping contact submission, `APPLEPAYTKN`
+- **Google Pay** (Android) — Ready-UI with full request configuration, or your own Google Pay button
+- **VISA, MasterCard, MADA, STC Pay, Klarna, PayPal** and every other HyperPay brand
+- **Tokenization** — Save cards during payment or stand-alone, list a checkout's stored tokens, pay with a token
+- **3DS2** — Handled automatically; challenge-screen styling, app URL and device security warnings are configurable
+- **Async payment flows** — Redirect-based payments (e.g. 3DS, bank redirects), on both the AppDelegate and UIScene lifecycles
+- **Card helpers** — BIN lookup and native card field validators
 - **Test and Live modes**
 
 ## Screenshots
@@ -52,7 +54,7 @@ Or add manually to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  hyperpay_sdk: ^2.5.0
+  hyperpay_sdk: ^2.6.0
 ```
 
 Then run:
@@ -118,7 +120,15 @@ android {
 
 > **Important:** The scheme must be **lowercase only** (e.g. `com.your.app.payments`, not `com.your.App.Payments`). This must match the `shopperResultUrl` parameter you pass to the SDK.
 
-**4. Google Pay (optional)** — add inside `<application>` in your `AndroidManifest.xml`:
+**4. Use `FlutterFragmentActivity`** in `android/app/src/main/kotlin/.../MainActivity.kt`. The Ready-UI checkout is launched with the Activity Result API, which needs a `ComponentActivity`; with the default `FlutterActivity`, `checkoutReadyUI` returns `NO_LAUNCHER`:
+
+```kotlin
+import io.flutter.embedding.android.FlutterFragmentActivity
+
+class MainActivity : FlutterFragmentActivity()
+```
+
+**5. Google Pay (optional)** — add inside `<application>` in your `AndroidManifest.xml`:
 
 ```xml
 <meta-data
@@ -320,6 +330,88 @@ final result = await HyperpaySdk.payApplePay(
 );
 ```
 
+### Ready-UI options and callbacks
+
+Every Ready-UI setting is in `CheckoutOptions`. All fields are optional.
+
+```dart
+final result = await HyperpaySdk.checkoutReadyUI(
+  checkoutId: checkoutId,
+  brands: ['MADA', 'VISA', 'MASTER'], // display order; also the brand-detection priority
+  shopperResultUrl: 'com.your.app.payments',
+  options: const CheckoutOptions(
+    storePaymentDetails: StorePaymentDetailsMode.prompt, // default on both platforms
+    skipCvv: SkipCvvMode.never,
+    displayTotalAmount: true,
+    billingAddress: BillingAddress(country: 'SA', cityRequired: true),
+    brandDetectionType: BrandDetectionType.binList,
+    tokensSecurityPolicy: SecurityPolicyMode.requiredIfAvailable, // Face ID / screen lock for saved cards
+    installmentEnabled: true,
+    installmentOptions: [1, 3, 6],
+    cardHolderPattern: r"^[A-Za-z][A-Za-z .'-]{1,49}$",
+    theme: CheckoutTheme(accentColor: 0xFF00897B), // iOS
+    androidThemeResource: 'MyCheckoutTheme',          // Android, extends Theme.Checkout
+  ),
+  threeDSConfig: const ThreeDSConfig(
+    uiCustomization: ThreeDSUiCustomization(
+      toolbar: ThreeDSToolbarCustomization(backgroundColor: 0xFF00897B),
+    ),
+  ),
+  // Called before the payment is submitted: show an order summary, re-create
+  // the checkout for the chosen brand, or abort.
+  onBeforeSubmit: (info) async {
+    final ok = await confirmOrder(info.paymentBrand);
+    return ok ? const BeforeSubmitDecision.proceed() : const BeforeSubmitDecision.abort();
+  },
+);
+```
+
+Open the checkout directly on one brand's form (the "payment button" integration) with `paymentBrand`, e.g. `'STC_PAY'`, `'APPLEPAY'`, `'GOOGLEPAY'`, or `'CARD'` for the card form.
+
+Apple Pay in the Ready-UI can update the sheet when the shopper changes shipping details: set `requiredShippingContactFields` and `shippingMethods` in `ApplePayConfig`, and pass `onApplePayShippingContactSelected` / `onApplePayShippingMethodSelected`.
+
+### Stored cards (tokens)
+
+```dart
+// 1. Create the checkout on your server with registrations[0].id=<token>, …
+// 2. List the tokens and pay with one from your own UI:
+final info = await HyperpaySdk.getCheckoutInfo(checkoutId: checkoutId);
+final token = info.tokens.first; // brand, last 4 digits, expiry, holder
+final result = await HyperpaySdk.payWithToken(
+  checkoutId: checkoutId,
+  tokenId: token.tokenId,
+  brand: token.paymentBrand,
+  cvv: cvvFromShopper, // if your acquirer needs it
+  shopperResultUrl: 'com.your.app.payments',
+);
+```
+
+Save a card **without paying**: create the checkout with `createRegistration=true` and no `paymentType`, then call `HyperpaySdk.registerCard(...)` and read the token (`id`) from the registration status on your server. Delete tokens from your server (HyperPay's registration delete API), not from the app.
+
+### Other payment methods from your own UI
+
+| Method | Brand |
+| --- | --- |
+| `payStcPay(verificationOption:, mobilePhone:)` | STC Pay (OTP or QR code) |
+| `payGooglePay(paymentToken:, cardBrand:)` | Google Pay from your own button, e.g. with the `pay` package (Android) |
+| `paySamsungPay(paymentCredential:)` | Samsung Pay; get the credential with the Samsung Pay SDK in your app (Android) |
+| `klarnaCreateSession(...)` → `klarnaSubmitPayment(...)` | Klarna Payments native flow; render Klarna with Klarna's Mobile SDK using the returned `clientToken` |
+| `payWithBrand(brand:, parameters:)` | Any other brand (PayPal, Klarna redirect, iDEAL, Affirm, …) with optional HyperPay parameters |
+
+### Card helpers
+
+```dart
+final v = await HyperpaySdk.validateCard(number: number, expiryMonth: mm, expiryYear: yyyy, cvv: cvv);
+if (!v.isValid) showErrors(v);
+
+final bin = await HyperpaySdk.requestBinInfo(checkoutId: checkoutId, bin: number.substring(0, 6));
+if (bin.isMada) { /* route through DB */ }
+```
+
+### 3-D Secure 2
+
+3DS2 runs automatically. Optionally pass a `ThreeDSConfig` to `setup(...)` (your-own-UI payments) or `checkoutReadyUI(...)` to style the challenge screens, set the app URL for app-to-app authentication (`requestorAppUrl`), or restrict device data. `HyperpaySdk.getThreeDSWarnings()` returns the 3DS SDK's device security warnings (jailbreak/root, emulator, debugger).
+
 ### Check Payment Status
 
 ```dart
@@ -378,17 +470,55 @@ See the [HyperPay documentation](https://wordpresshyperpay.docs.oppwa.com/) for 
 
 ---
 
+## HyperPay Mobile SDK coverage
+
+How each part of [HyperPay's Mobile SDK documentation](https://hyperpay.docs.oppwa.com/integrations/mobile-sdk) maps to this plugin (OPPWA 7.11.0):
+
+| HyperPay feature | Plugin |
+| --- | --- |
+| Ready-to-Use UI, payment brands | `checkoutReadyUI(brands:)` |
+| Payment buttons (single brand) | `checkoutReadyUI(paymentBrand:)` |
+| UI customization | `CheckoutOptions.theme` (iOS), `androidThemeResource` (Android), `customLogoAssets` / `androidCustomLogoDrawables` |
+| Internationalization | `lang:`; override texts with `OPPCheckout.strings` (iOS) or `res/values-xx/strings.xml` (Android) in your app |
+| Advanced options (total amount, back button, skip CVV, holder, installments, billing address, brand detection, security, callbacks, summary page, COPYandPAY `wpwlOptions`) | `CheckoutOptions`, `onBeforeSubmit` |
+| Asynchronous payments | `shopperResultUrl:`, handled for AppDelegate and UIScene apps |
+| Tokenization (Ready-UI and custom UI) | `storePaymentDetails`, `payCustomUI(tokenize:)`, `registerCard`, `getCheckoutInfo().tokens`, `payWithToken` |
+| Card scanning | `CheckoutOptions.cardScanningEnabled` (camera on iOS, NFC on Android) |
+| SDK & your own UI | `payCustomUI`, `payStcPay`, `payWithBrand`, `validateCard`, `getCheckoutInfo` |
+| BIN detection | `requestBinInfo` |
+| Apple Pay | `ApplePayConfig`, `payApplePay`, `payApplePayDynamic`, shipping callbacks, `APPLEPAYTKN` |
+| Google Pay | `GooglePayConfig`, `googlePaySubmitTypes`, `payGooglePay`, `GOOGLEPAYTKN` |
+| Klarna Payments | Redirect: brand in `checkoutReadyUI` / `payWithBrand`. Native: `klarnaCreateSession` + `klarnaSubmitPayment` with Klarna's Mobile SDK |
+| Samsung Pay | `paySamsungPay` (your own Samsung Pay button). The Ready-UI Samsung Pay sheet needs Samsung's SDK jar compiled into the plugin, which can't be redistributed, so it isn't exposed. |
+| 3D Secure 2 | `ThreeDSConfig`, `getThreeDSWarnings` |
+| Error codes | `PaymentResult.errorCode` / `errorMessage`; shopper cancellations become `isCanceled: true` |
+| Fraud management / Cybersource device fingerprint, "disable Pay button on error", `onDetectedBin` | Not available: these arrive in OPPWA SDK versions newer than 7.11.0 |
+
+---
+
 ## API Reference
 
 ### `HyperpaySdk`
 
-| Method                  | Description                                                        |
-| ----------------------- | ------------------------------------------------------------------ |
-| `setup(mode:)`          | Initialize the SDK. Call once before any payment.                  |
-| `checkoutReadyUI(...)`  | Launch the pre-built checkout UI. Returns `PaymentResult`.         |
-| `payCustomUI(...)`      | Submit a card payment from your own form. Returns `PaymentResult`. |
-| `payApplePay(...)`      | Submit an Apple Pay payment (iOS only). Returns `PaymentResult`.   |
-| `getPaymentStatus(...)` | Get checkout info for verification. Returns `CheckoutInfo`.        |
+| Method | Description |
+| --- | --- |
+| `setup(mode:, threeDSConfig:)` | Initialize the SDK. Call once before any payment. |
+| `checkoutReadyUI(...)` | Launch the pre-built checkout UI (options, single brand, callbacks). Returns `PaymentResult`. |
+| `payCustomUI(...)` | Card payment from your own form; `brand` optional. Returns `PaymentResult`. |
+| `payWithToken(...)` | Pay with a stored token. Returns `PaymentResult`. |
+| `registerCard(...)` | Save a card without paying. Returns `PaymentResult`. |
+| `payStcPay(...)` | STC Pay from your own UI. Returns `PaymentResult`. |
+| `payWithBrand(...)` | Any brand by name with optional parameters. Returns `PaymentResult`. |
+| `payGooglePay(...)` | Google Pay token from your own button (Android). Returns `PaymentResult`. |
+| `paySamsungPay(...)` | Samsung Pay credential (Android). Returns `PaymentResult`. |
+| `klarnaCreateSession(...)`, `klarnaSubmitPayment(...)` | Klarna Payments native flow. Return `KlarnaSession`. |
+| `payApplePay(...)`, `payApplePayDynamic(...)` | Apple Pay from your own button (iOS). Return `PaymentResult`. |
+| `isApplePayAvailable(...)` | Whether Apple Pay can be used on this device (iOS). |
+| `requestBinInfo(...)` | Brand / type for a card BIN. Returns `HyperpayBinInfo`. |
+| `validateCard(...)` | Native card field validation. Returns `CardValidationResult`. |
+| `getCheckoutInfo(...)` | Amount, currency, resource path and stored tokens of a checkout. Returns `CheckoutInfo`. |
+| `getPaymentStatus(...)` | Get checkout info for verification. Returns `CheckoutInfo`. |
+| `getThreeDSWarnings()` | 3DS SDK device security warnings. Returns `List<ThreeDSWarning>`. |
 
 ### `PaymentResult`
 
@@ -407,6 +537,10 @@ See the [HyperPay documentation](https://wordpresshyperpay.docs.oppwa.com/) for 
 | -------------- | --------- | --------------------------------- |
 | `status`       | `String?` | Payment status (e.g. `"CHARGED"`) |
 | `paymentBrand` | `String?` | Brand used (e.g. `"VISA"`)        |
+| `amount`, `currencyCode` | `double?`, `String?` | Checkout amount and currency |
+| `resourcePath` | `String?` | Resource path for the status query |
+| `tokens`       | `List<StoredToken>` | Stored payment methods attached to the checkout |
+| `brands`       | `List<String>` | Brands enabled for the checkout (Android) |
 | `rawResponse`  | `Map?`    | Raw SDK response data             |
 
 ### `PaymentMode`

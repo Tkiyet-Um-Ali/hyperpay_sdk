@@ -32,13 +32,17 @@ Dart API (lib/hyperpay_sdk.dart - HyperpaySdk class)
         └── oppwa.mobile AAR + ipworks3ds AAR
 ```
 
-**Method channel calls:** `setup`, `checkoutReadyUI`, `payCustomUI`, `payApplePay`, `payApplePayDynamic` (iOS only), `requestBinInfo`, `getPaymentStatus`
+**Method channel calls (Dart → native):** `setup`, `checkoutReadyUI`, `payCustomUI`, `payWithToken`, `registerCard`, `payStcPay`, `payWithBrand`, `payGooglePay` / `paySamsungPay` (Android), `klarnaCreateSession`, `klarnaSubmitPayment`, `validateCard`, `payApplePay` / `payApplePayDynamic` / `isApplePayAvailable` (iOS), `requestBinInfo`, `getCheckoutInfo`, `getPaymentStatus`, `getThreeDSWarnings`. Platform-only methods return error code `UNSUPPORTED` on the other platform (never `notImplemented`).
+
+**Native → Dart calls:** `resolveApplePayCheckout`, `onBeforeSubmit`, `applePayShippingContactSelected`, `applePayShippingMethodSelected` (handled in `lib/src/hyperpay_sdk_method_channel.dart`). On iOS the optional `OPPCheckoutProviderDelegate` methods live on `HyperpayCheckoutDelegate`, which overrides `responds(to:)` so the SDK only sees a method when Dart registered its callback; implementing them unconditionally makes the SDK wait on them for every payment. On Android the Ready-UI callbacks are Parcelable and reach the plugin through a static holder (`CheckoutCallbacks.kt`).
 
 **Transaction types:**
 - **Sync** — immediate result with resourcePath for server verification
 - **Async** — browser redirect (Safari VC on iOS, Intent on Android) for 3DS/gateway, then URL scheme callback returns resourcePath
 
-**Data models** live in `lib/src/models/`: `PaymentMode`, `PaymentResult`, `CheckoutInfo`, `GooglePayConfig`, `ApplePayConfig`.
+**Data models** live in `lib/src/models/` (`toMap()` / `fromMap()` define the channel map shapes): `PaymentMode`, `PaymentResult`, `CheckoutInfo` / `StoredToken`, `GooglePayConfig`, `ApplePayConfig` (+ summary items, shipping), `CheckoutOptions`, `CheckoutTheme`, `ThreeDSConfig`, `payment_extras.dart` (before-submit, STC Pay, card validation, Klarna).
+
+**Real native APIs:** trust the OPPWA 7.11.0 headers/swiftinterface (CocoaPods cache `hyperpay_sdk_ios/7.11.0-*`) and the Android AAR classes (`javap`) over HyperPay's web docs, which have typos and describe newer SDK versions.
 
 ## Platform Requirements
 

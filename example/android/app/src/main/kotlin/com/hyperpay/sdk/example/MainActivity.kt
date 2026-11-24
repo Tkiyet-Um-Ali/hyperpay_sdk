@@ -1,5 +1,7 @@
 package com.hyperpay.sdk.example
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// hyperpay_sdk launches the checkout through the Activity Result API, which
+// needs a ComponentActivity: use FlutterFragmentActivity, not FlutterActivity.
+class MainActivity : FlutterFragmentActivity()

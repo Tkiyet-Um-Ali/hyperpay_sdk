@@ -4,3 +4,7 @@ export 'models/checkout_info.dart';
 export 'models/google_pay_config.dart';
 export 'models/apple_pay_config.dart';
 export 'models/bin_info.dart';
+export 'models/checkout_options.dart';
+export 'models/checkout_theme.dart';
+export 'models/three_ds_config.dart';
+export 'models/payment_extras.dart';

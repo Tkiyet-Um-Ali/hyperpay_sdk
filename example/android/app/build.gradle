@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace "com.hyperpay.sdk.example"
-    compileSdk 35
+    compileSdk flutter.compileSdkVersion
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -24,7 +24,7 @@ android {
     defaultConfig {
         applicationId "com.hyperpay.sdk.example"
         minSdk 24
-        targetSdk 35
+        targetSdk flutter.targetSdkVersion
         versionCode 1
         versionName "1.0"
     }
