@@ -19,6 +19,7 @@ Covers the HyperPay Mobile SDK documentation end to end on the bundled OPPWA 7.1
 - **Docs**: Android apps must use `FlutterFragmentActivity` (with `FlutterActivity`, `checkoutReadyUI` returns `NO_LAUNCHER`). New README sections for every feature, plus a coverage table mapping HyperPay's docs to the plugin.
 - **Example**: new "Advanced features" screen; Android example moved to `FlutterFragmentActivity`, Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0 and Flutter-managed compile/target SDK (it didn't build with JDK 25 before).
 - **Tests**: Dart unit tests for the models and the native-to-Dart callbacks.
+- **Android: built-in Kotlin.** The plugin no longer applies the Kotlin Gradle Plugin (`kotlin-android`); AGP 9 compiles its Kotlin, and `kotlinOptions` became `kotlin { compilerOptions }`. This removes Flutter's "migrate your plugin to Built-in Kotlin" build warning. It works with `android.builtInKotlin` set to `true` or `false`. Following Flutter's migration guide, the minimum is now **Flutter 3.44 / Dart 3.12** (was 3.38 / 3.10); projects on older Flutter keep resolving 2.5.x. The example app is migrated too.
 - **Not available on OPPWA 7.11.0**: device fingerprinting (fraud management / Cybersource), `disablePayNowButtonOnError` and `onDetectedBin` arrive in newer SDK versions. The Ready-UI Samsung Pay sheet (`SamsungPayConfig`) needs Samsung's SDK jar compiled into the plugin, so only `paySamsungPay` is offered.
 
 ## 2.5.0

@@ -30,8 +30,8 @@ Flutter plugin wrapping the official **HyperPay (OPPWA) Mobile SDK v7.11.0** for
 | -------- | -------------------- |
 | iOS      | 13.0                 |
 | Android  | API 24 (Android 7.0) |
-| Flutter  | 3.38+                |
-| Dart     | 3.10+                |
+| Flutter  | 3.44+                |
+| Dart     | 3.12+                |
 
 ---
 

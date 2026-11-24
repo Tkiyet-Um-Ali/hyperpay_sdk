@@ -47,7 +47,7 @@ Dart API (lib/hyperpay_sdk.dart - HyperpaySdk class)
 ## Platform Requirements
 
 - **iOS:** min 13.0, Swift 5.0, CocoaPods consumers need the static-framework Podfile hook (see README); SPM needs nothing
-- **Android:** minSdk 24, Java 17, Kotlin 2.0.21, Gradle 8.7.3
+- **Android:** minSdk 24, Java 17, built-in Kotlin (AGP 9 compiles the plugin's Kotlin; do not re-add `kotlin-android` or `kotlinOptions`), buildscript AGP 9.1.0 / Kotlin 2.4.0. Flutter ≥ 3.44 / Dart ≥ 3.12. Example app: Gradle 9.3.1, `FlutterFragmentActivity`.
 - **iOS integration:** Swift Package Manager (`ios/hyperpay_sdk/Package.swift`) and CocoaPods (`ios/hyperpay_sdk.podspec`) are both supported. The example app uses SPM (`enable-swift-package-manager: true` in `example/pubspec.yaml`, no Podfile).
 - **Native SDK binaries** are not bundled in this repo — they are pulled from:
   - iOS (CocoaPods): pod `hyperpay_sdk_ios` (version-matched to the OPPWA version, tag `7.11.0`) — https://github.com/hrvojecukman/hyperpay_sdk_ios

@@ -11,9 +11,10 @@ topics:
   - mada
 
 environment:
-  sdk: ">=3.10.0 <4.0.0"
+  sdk: ">=3.12.0 <4.0.0"
   # 3.38: UIScene plugin APIs (FlutterSceneLifeCycleDelegate / addSceneDelegate).
-  flutter: ">=3.38.0"
+  # 3.44: built-in Kotlin (Android plugin no longer applies kotlin-android).
+  flutter: ">=3.44.0"
 
 dependencies:
   flutter:
