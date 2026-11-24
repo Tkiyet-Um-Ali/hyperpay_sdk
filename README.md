@@ -46,15 +46,14 @@ There are **2 steps** to integrate HyperPay into your Flutter app:
 
 ### Step 1 — Install the Plugin
 
-```sh
-flutter pub add hyperpay_sdk
-```
-
-Or add manually to your `pubspec.yaml`:
+Versions after 2.4.2 are not on pub.dev. Add the plugin from this repository, pinned to a release tag:
 
 ```yaml
 dependencies:
-  hyperpay_sdk: ^2.6.0
+  hyperpay_sdk:
+    git:
+      url: https://github.com/Tkiyet-Um-Ali/hyperpay_sdk.git
+      ref: v2.6.1
 ```
 
 Then run:

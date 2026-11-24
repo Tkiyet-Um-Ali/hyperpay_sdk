@@ -1,6 +1,7 @@
-## Unreleased
+## 2.6.1
 
 - **Fix `requestBinInfo`** on iOS and Android. It always failed (iOS: `BIN_INFO_ERROR` "bad request (400)", code 3000; Android: "Malformed server response"), because the SDK needs the checkout info fetched right before. The plugin now fetches it before every lookup, and the error message says which of the two requests failed.
+- **Example app**: creates checkouts through a backend (`TuaApi`) instead of holding HyperPay credentials, and confirms each payment's outcome with the backend, because the SDK's success only means the payment was submitted.
 
 ## 2.6.0
 
