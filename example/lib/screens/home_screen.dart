@@ -67,12 +67,13 @@ class _HomeScreenState extends State<HomeScreen> {
       if (checkoutId == null) return;
 
       setState(() => _status = 'Checkout ID: $checkoutId');
-      final result = await HyperpaySdk.checkoutReadyUI(
+      final sdkResult = await HyperpaySdk.checkoutReadyUI(
         checkoutId: checkoutId,
-        brands: ['VISA', 'MASTER', 'MADA'],
+        brands: PaymentService.checkoutBrands,
         shopperResultUrl: PaymentService.shopperResultUrl,
         themeColor: themeColor,
       );
+      final result = await PaymentService.completePayment(sdkResult);
       setState(() => _status = PaymentService.formatResult(result));
       _showResultSnackBar(result);
     } catch (e) {
@@ -107,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() => _status = 'Checkout ID: $checkoutId');
 
-      final result = await HyperpaySdk.payApplePay(
+      final sdkResult = await HyperpaySdk.payApplePay(
         checkoutId: checkoutId,
         merchantId: 'merchant.com.example.app',
         countryCode: 'SA',
@@ -116,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> {
         companyName: 'Example Company',
         shopperResultUrl: PaymentService.shopperResultUrl,
       );
+      final result = await PaymentService.completePayment(sdkResult);
       setState(() => _status = PaymentService.formatResult(result));
       _showResultSnackBar(result);
     } catch (e) {

@@ -62,15 +62,15 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
     );
     if (checkoutId == null) return 'No checkout ID';
 
-    final result = await HyperpaySdk.checkoutReadyUI(
+    final sdkResult = await HyperpaySdk.checkoutReadyUI(
       checkoutId: checkoutId,
-      brands: ['MADA', 'VISA', 'MASTER'],
+      brands: PaymentService.checkoutBrands,
       shopperResultUrl: PaymentService.shopperResultUrl,
       options: CheckoutOptions(
         storePaymentDetails: StorePaymentDetailsMode.prompt,
         displayTotalAmount: true,
         brandDetectionType: BrandDetectionType.binList,
-        brandDetectionPriority: const ['MADA', 'VISA', 'MASTER'],
+        brandDetectionPriority: PaymentService.checkoutBrands,
         billingAddress: const BillingAddress(country: 'SA', city: 'Riyadh'),
         tokensSecurityPolicy: SecurityPolicyMode.requiredIfAvailable,
         cardHolderPattern: r"^[A-Za-z][A-Za-z .'-]{1,49}$",
@@ -103,6 +103,7 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
             : const BeforeSubmitDecision.abort();
       },
     );
+    final result = await PaymentService.completePayment(sdkResult);
     return PaymentService.formatResult(result);
   }
 
@@ -111,12 +112,13 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
     final checkoutId =
         await PaymentService.getCheckoutId(amount: widget.amount);
     if (checkoutId == null) return 'No checkout ID';
-    final result = await HyperpaySdk.checkoutReadyUI(
+    final sdkResult = await HyperpaySdk.checkoutReadyUI(
       checkoutId: checkoutId,
-      brands: brand == 'CARD' ? ['VISA', 'MASTER', 'MADA'] : [brand],
+      brands: brand == 'CARD' ? PaymentService.checkoutBrands : [brand],
       paymentBrand: brand,
       shopperResultUrl: PaymentService.shopperResultUrl,
     );
+    final result = await PaymentService.completePayment(sdkResult);
     return PaymentService.formatResult(result);
   }
 
@@ -137,13 +139,14 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
     if (info.tokens.isEmpty) return 'Checkout has no tokens: $info';
     final token = info.tokens.first;
 
-    final result = await HyperpaySdk.payWithToken(
+    final sdkResult = await HyperpaySdk.payWithToken(
       checkoutId: checkoutId,
       tokenId: token.tokenId,
       brand: token.paymentBrand,
       cvv: _testCard.cvv,
       shopperResultUrl: PaymentService.shopperResultUrl,
     );
+    final result = await PaymentService.completePayment(sdkResult);
     return 'Paid with ${token.paymentBrand} •••• ${token.cardLast4Digits}\n'
         '${PaymentService.formatResult(result)}';
   }

@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import 'package:hyperpay_sdk/hyperpay_sdk.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'tua_api.dart';
+
 class PaymentService {
   PaymentService._();
 
@@ -12,12 +14,84 @@ class PaymentService {
   static String get entityId => dotenv.env['HYPERPAY_ENTITY_ID'] ?? '';
   static String get accessToken => dotenv.env['HYPERPAY_ACCESS_TOKEN'] ?? '';
 
+  /// Direct HyperPay REST access (test shortcut, never in production).
+  /// Optional: only needed for the saved-cards and registration demos.
+  static bool get hasHyperpayCredentials =>
+      entityId.isNotEmpty && accessToken.isNotEmpty;
+
+  /// Brands enabled for the most recent checkout. With the Tua backend these
+  /// come from its response (`hyperpay.brands`).
+  static List<String> checkoutBrands = const ['VISA', 'MASTER', 'MADA'];
+
+  /// Call with every finished payment result and use the result it returns.
+  ///
+  /// With the Tua backend the SDK's "success" is checked against the backend,
+  /// because it only means the payment was submitted: a declined card or a
+  /// failed 3-D Secure check ends the same way. A successful or failed payment
+  /// rotates the `Idempotency-Key`; a cancelled one keeps it.
+  static Future<PaymentResult> completePayment(PaymentResult result) async {
+    if (!TuaApi.isConfigured || result.isCanceled) return result;
+
+    final paymentId = TuaApi.current?.paymentId;
+    var verified = result;
+    if (result.isSuccess && paymentId != null) {
+      try {
+        final outcome = await TuaApi.paymentOutcome(paymentId);
+        if (!outcome.isPaid) {
+          verified = PaymentResult(
+            isSuccess: false,
+            isCanceled: false,
+            resourcePath: result.resourcePath,
+            transactionType: result.transactionType,
+            errorCode: 'PAYMENT_${outcome.status.toUpperCase()}',
+            errorMessage: outcome.isOpen || outcome.status == 'review'
+                ? 'Payment not confirmed yet (status: ${outcome.status}). '
+                    'Check it again later.'
+                : outcome.failureMessage ?? 'Payment ${outcome.status}',
+          );
+        }
+      } catch (e) {
+        verified = PaymentResult(
+          isSuccess: false,
+          isCanceled: false,
+          resourcePath: result.resourcePath,
+          transactionType: result.transactionType,
+          errorCode: 'PAYMENT_UNVERIFIED',
+          errorMessage: 'Could not confirm the payment with the backend: $e',
+        );
+      }
+    }
+    await TuaApi.paymentFinished(succeeded: verified.isSuccess);
+    return verified;
+  }
+
   static Future<String?> getCheckoutId({
     required String amount,
     String? paymentType = 'DB',
     bool tokenize = false,
     List<String> registrationIds = const [],
   }) async {
+    if (TuaApi.isConfigured) {
+      if (paymentType == null) {
+        throw UnsupportedError(
+            'Registration-only checkouts need a backend endpoint (the Tua '
+            'checkout API creates donations) or HYPERPAY_* in .env.');
+      }
+      if (tokenize || registrationIds.isNotEmpty) {
+        print('[HyperPay] Tua backend decides tokenization and stored cards; '
+            'ignoring tokenize/registrationIds.');
+      }
+      final checkout = await TuaApi.createCheckout();
+      checkoutBrands = checkout.brands;
+      print('[HyperPay] Tua checkout ${checkout.reference}: '
+          '${checkout.amount} ${checkout.currency}, brands ${checkout.brands}, '
+          'mode ${checkout.mode}');
+      return checkout.checkoutId;
+    }
+    if (!hasHyperpayCredentials) {
+      throw StateError('Configure TUA_* (recommended) or HYPERPAY_* in .env');
+    }
+
     // paymentType: null + tokenize: true = stand-alone registration (save a
     // card without paying; see HyperpaySdk.registerCard).
     final body = <String, String>{
@@ -55,6 +129,9 @@ class PaymentService {
   }
 
   static Future<String?> extractAndSaveRegistration(String checkoutId) async {
+    // Reading the registration ID needs HyperPay's REST API; with the Tua
+    // backend your server stores it instead.
+    if (!hasHyperpayCredentials) return null;
     final uri = Uri.parse(
       'https://eu-test.oppwa.com/v1/checkouts/$checkoutId/payment'
       '?entityId=$entityId',
