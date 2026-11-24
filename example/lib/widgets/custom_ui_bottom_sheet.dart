@@ -42,8 +42,7 @@ class CustomUIBottomSheet extends StatefulWidget {
 }
 
 class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
-  final _cardNumberController =
-      TextEditingController(text: '4200000000000000');
+  final _cardNumberController = TextEditingController(text: '4200000000000000');
   final _holderController = TextEditingController(text: 'John Doe');
   final _expiryController = TextEditingController(text: '12/27');
   final _cvvController = TextEditingController(text: '123');
@@ -167,7 +166,8 @@ class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
       final expiry = _parseExpiry();
       final brand = _brandForSubmission();
       // MADA must go through a DB checkout; PA/DB choice for others follows saveOnly.
-      final paymentType = brand == 'MADA' ? 'DB' : (widget.saveOnly ? 'PA' : 'DB');
+      final paymentType =
+          brand == 'MADA' ? 'DB' : (widget.saveOnly ? 'PA' : 'DB');
       final checkoutId = await PaymentService.getCheckoutId(
         amount: widget.saveOnly ? '0.00' : widget.amount,
         paymentType: paymentType,
@@ -175,13 +175,15 @@ class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
       );
       if (checkoutId == null) return;
 
+      final number = _cardNumberController.text.trim();
+      final last4 =
+          number.length > 4 ? number.substring(number.length - 4) : number;
+      // Never log full card data.
       print('[HyperPay] CustomUI params: checkoutId=$checkoutId, '
-          'brand=$brand, card=${_cardNumberController.text.trim()}, '
-          'holder=${_holderController.text.trim()}, '
-          'expiry=${expiry.month}/${expiry.year}, '
+          'brand=$brand, card=****$last4, '
           'shopperResultUrl=${PaymentService.shopperResultUrl}, saveCard=$_saveCard');
 
-      final result = await HyperpaySdk.payCustomUI(
+      final sdkResult = await HyperpaySdk.payCustomUI(
         checkoutId: checkoutId,
         brand: brand,
         cardNumber: _cardNumberController.text.trim(),
@@ -192,7 +194,8 @@ class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
         shopperResultUrl: PaymentService.shopperResultUrl,
       );
 
-      print('[HyperPay] CustomUI result: ${result.toMap()}');
+      print('[HyperPay] CustomUI result: ${sdkResult.toMap()}');
+      final result = await PaymentService.completePayment(sdkResult);
       String statusText;
 
       if (widget.saveOnly && result.isSuccess) {
@@ -241,10 +244,7 @@ class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-              widget.saveOnly
-                  ? 'Add Card'
-                  : 'Pay ${widget.amount} SAR',
+          Text(widget.saveOnly ? 'Add Card' : 'Pay ${widget.amount} SAR',
               style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
           TextField(
@@ -310,8 +310,9 @@ class _CustomUIBottomSheetState extends State<CustomUIBottomSheet> {
           if (!widget.saveOnly)
             CheckboxListTile(
               value: _saveCard,
-              onChanged:
-                  _isLoading ? null : (v) => setState(() => _saveCard = v ?? false),
+              onChanged: _isLoading
+                  ? null
+                  : (v) => setState(() => _saveCard = v ?? false),
               title: const Text('Save card for future payments'),
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,

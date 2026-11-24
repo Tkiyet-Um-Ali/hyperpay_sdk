@@ -223,14 +223,15 @@ cd example
 cp .env.example .env
 ```
 
-Edit `.env` with your HyperPay credentials:
+The example creates checkouts through a backend, as a production app should: `TuaApi` (`example/lib/services/tua_api.dart`) calls `POST /v1/donations/checkout` and passes the returned `hyperpay.checkoutId` and `hyperpay.brands` to the plugin. Fill in `.env`:
 
-```
-HYPERPAY_ENTITY_ID=your_entity_id_here
-HYPERPAY_ACCESS_TOKEN=your_access_token_here
-```
+- `TUA_API_BASE_URL`, `TUA_ACCESS_TOKEN`, `TUA_REFRESH_TOKEN`: on a 401 the app calls `POST /v1/auth/refresh` (`client: mobile`) and stores the rotated tokens on the device.
+- `TUA_IDEMPOTENCY_KEY` (optional first key) and the donation body values (`TUA_PROGRAM_SLUG`, `TUA_OPTION_ID`, `TUA_PROFILE_ID`, …). The `Idempotency-Key` changes after every successful or failed payment, and when the backend reports the key as already used or the replayed checkout has expired.
+- After the SDK reports a submitted payment, `PaymentService.completePayment` reads the real outcome from `GET /v1/donations/payments/{id}`. The SDK's success only means the card form was submitted; a declined card or failed 3-D Secure check ends the same way.
+- A failed payment is tried again with `POST /v1/donations/payments/{id}/retry` on the next checkout, so it doesn't hold an open-checkout slot. On `429 payments.too_many_open_checkouts` the app resumes the oldest `pending` checkout from `openCheckouts` (`GET /v1/donations/payments/{id}`) or retries a `failed` one. The example does this without asking because all its checkouts are the same donation; a real app should let the donor choose between finishing it and cancelling it (`TuaApi.cancelPayment`).
+- `HYPERPAY_ENTITY_ID` / `HYPERPAY_ACCESS_TOKEN` are optional and **test-only**: only the saved-cards and "save card without paying" demos call HyperPay's REST API directly. Never ship a HyperPay access token in an app.
 
-Then run:
+`.env` is git-ignored. Then run:
 
 ```sh
 flutter run

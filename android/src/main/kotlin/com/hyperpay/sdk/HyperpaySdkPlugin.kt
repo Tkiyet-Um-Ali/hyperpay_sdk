@@ -555,29 +555,41 @@ class HyperpaySdkPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, ITran
             return
         }
 
+        // The SDK only allows a BIN lookup right after the checkout info was
+        // requested ("Malformed server response" otherwise), and a payment can
+        // reset that state, so fetch the info before every lookup.
+        requestCheckoutInfo(
+            provider,
+            checkoutId,
+            onSuccess = { requestBinInfo(provider, checkoutId, bin, result) },
+            onFailure = { message, code ->
+                result.error(
+                    "BIN_INFO_ERROR",
+                    "Checkout info request failed: ${message ?: "unknown error"}",
+                    code
+                )
+            },
+        )
+    }
+
+    private fun requestBinInfo(provider: OppPaymentProvider, checkoutId: String, bin: String, result: Result) {
         provider.requestBinInfo(checkoutId, bin, object : BinInfoListener {
             override fun onResult(binInfo: BinInfo?, paymentError: PaymentError?) {
-                if (paymentError != null) {
-                    result.error(
-                        "BIN_INFO_ERROR",
-                        paymentError.errorMessage ?: "BIN info request failed",
-                        paymentError.errorCode.toString()
-                    )
-                    return
-                }
-                if (binInfo == null) {
+                HyperpayCallbackBridge.runOnMain {
+                    if (paymentError != null) {
+                        result.error(
+                            "BIN_INFO_ERROR",
+                            "BIN info request failed: ${paymentError.errorMessage ?: "unknown error"}",
+                            paymentError.errorCode.toString()
+                        )
+                        return@runOnMain
+                    }
                     result.success(mapOf(
-                        "brands" to emptyList<String>(),
-                        "binType" to null,
-                        "type" to null,
+                        "brands" to (binInfo?.brands?.toList() ?: emptyList<String>()),
+                        "binType" to binInfo?.binType,
+                        "type" to binInfo?.type,
                     ))
-                    return
                 }
-                result.success(mapOf(
-                    "brands" to (binInfo.brands?.toList() ?: emptyList<String>()),
-                    "binType" to binInfo.binType,
-                    "type" to binInfo.type,
-                ))
             }
         })
     }

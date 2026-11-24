@@ -31,6 +31,17 @@ class _SavedCardsScreenState extends State<SavedCardsScreen> {
   }
 
   Future<void> _loadCards() async {
+    if (!PaymentService.hasHyperpayCredentials) {
+      // This demo reads, charges and deletes registrations through HyperPay's
+      // REST API. With a backend (TUA_* in .env) these belong on your server.
+      setState(() {
+        _error = 'Saved cards call HyperPay directly. Add HYPERPAY_ENTITY_ID '
+            'and HYPERPAY_ACCESS_TOKEN to .env for this test-only demo, or '
+            'expose saved cards through your backend.';
+        _isLoading = false;
+      });
+      return;
+    }
     setState(() {
       _isLoading = true;
       _error = null;
@@ -108,8 +119,7 @@ class _SavedCardsScreenState extends State<SavedCardsScreen> {
       );
 
       final checkoutData = jsonDecode(checkoutResponse.body);
-      if (checkoutResponse.statusCode != 200 ||
-          checkoutData['id'] == null) {
+      if (checkoutResponse.statusCode != 200 || checkoutData['id'] == null) {
         final msg =
             checkoutData['result']?['description'] ?? checkoutResponse.body;
         _showSnackBar('Checkout failed: $msg');
@@ -130,7 +140,8 @@ class _SavedCardsScreenState extends State<SavedCardsScreen> {
       } else if (result.isCanceled) {
         _showSnackBar('Payment canceled');
       } else {
-        _showSnackBar('Payment failed: ${result.errorMessage ?? result.errorCode}');
+        _showSnackBar(
+            'Payment failed: ${result.errorMessage ?? result.errorCode}');
       }
     } catch (e) {
       _showSnackBar('Error: $e');

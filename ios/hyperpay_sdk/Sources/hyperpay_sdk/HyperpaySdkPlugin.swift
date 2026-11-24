@@ -908,31 +908,39 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
             return
         }
 
-        provider.requestBinInfo(withCheckoutID: checkoutId, bin: bin) { binInfo, error in
+        // The core SDK only allows a BIN lookup right after the checkout
+        // info was requested (see OPPPaymentProvider.h); otherwise HyperPay
+        // answers 400. The SDK keeps that state per provider and a payment
+        // can reset it, so fetch the info before every lookup.
+        provider.requestCheckoutInfo(withCheckoutID: checkoutId) { _, error in
             if let error = error as NSError? {
-                result(FlutterError(
-                    code: "BIN_INFO_ERROR",
-                    message: error.localizedDescription,
-                    details: "domain=\(error.domain), code=\(error.code)"
-                ))
+                DispatchQueue.main.async {
+                    result(HyperpaySdkPlugin.binInfoError("Checkout info request failed", error))
+                }
                 return
             }
-
-            guard let info = binInfo else {
-                result([
-                    "brands": [String](),
-                    "binType": NSNull(),
-                    "type": NSNull(),
-                ] as [String: Any])
-                return
+            provider.requestBinInfo(withCheckoutID: checkoutId, bin: bin) { binInfo, error in
+                DispatchQueue.main.async {
+                    if let error = error as NSError? {
+                        result(HyperpaySdkPlugin.binInfoError("BIN info request failed", error))
+                        return
+                    }
+                    result([
+                        "brands": binInfo?.brands ?? [String](),
+                        "binType": binInfo?.binType ?? NSNull(),
+                        "type": binInfo?.type ?? NSNull(),
+                    ] as [String: Any])
+                }
             }
-
-            result([
-                "brands": info.brands,
-                "binType": info.binType ?? NSNull(),
-                "type": info.type ?? NSNull(),
-            ] as [String: Any])
         }
+    }
+
+    private static func binInfoError(_ step: String, _ error: NSError) -> FlutterError {
+        return FlutterError(
+            code: "BIN_INFO_ERROR",
+            message: "\(step): \(error.localizedDescription)",
+            details: "domain=\(error.domain), code=\(error.code), info=\(error.userInfo)"
+        )
     }
 
     // MARK: - Checkout info / Payment Status

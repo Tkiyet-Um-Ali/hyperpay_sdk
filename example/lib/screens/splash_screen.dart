@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hyperpay_sdk/hyperpay_sdk.dart';
 
 import '../services/payment_service.dart';
+import '../services/tua_api.dart';
 import 'home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -31,11 +32,10 @@ class _SplashScreenState extends State<SplashScreen> {
     try {
       await dotenv.load(fileName: '.env');
 
-      if (PaymentService.entityId.isEmpty ||
-          PaymentService.accessToken.isEmpty) {
+      if (!TuaApi.isConfigured && !PaymentService.hasHyperpayCredentials) {
         setState(() {
-          _error =
-              'Missing HYPERPAY_ENTITY_ID or HYPERPAY_ACCESS_TOKEN in .env';
+          _error = 'Configure the backend (TUA_API_BASE_URL + TUA_ACCESS_TOKEN '
+              '/ TUA_REFRESH_TOKEN) in .env. See .env.example.';
           _isLoading = false;
         });
         return;
@@ -83,8 +83,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 Text(
                   _error!,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.error),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
                 const SizedBox(height: 16),
                 FilledButton(

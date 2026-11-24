@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix `requestBinInfo`** on iOS and Android. It always failed (iOS: `BIN_INFO_ERROR` "bad request (400)", code 3000; Android: "Malformed server response"), because the SDK needs the checkout info fetched right before. The plugin now fetches it before every lookup, and the error message says which of the two requests failed.
+
 ## 2.6.0
 
 Covers the HyperPay Mobile SDK documentation end to end on the bundled OPPWA 7.11.0. Every change is additive: existing calls compile and behave as before, except for the Android fixes listed below.
