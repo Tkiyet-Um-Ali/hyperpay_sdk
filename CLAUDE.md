@@ -17,8 +17,8 @@ dart format lib/             # Format code
 # Example app
 cd example && flutter pub get && flutter run
 
-# iOS pods (from example/ios/)
-cd example/ios && pod install --repo-update
+# iOS: the example uses Swift Package Manager (no pod install needed)
+cd example && flutter build ios --simulator
 ```
 
 ## Architecture
@@ -26,7 +26,7 @@ cd example/ios && pod install --repo-update
 ```
 Dart API (lib/hyperpay_sdk.dart - HyperpaySdk class)
     │  MethodChannel: "com.hyperpay.sdk/channel"
-    ├── iOS: ios/Classes/HyperpaySdkPlugin.swift
+    ├── iOS: ios/hyperpay_sdk/Sources/hyperpay_sdk/HyperpaySdkPlugin.swift (shared by SPM Package.swift + CocoaPods podspec)
     │   └── OPPWAMobile.xcframework + ipworks3ds XCFramework
     └── Android: android/src/main/kotlin/.../HyperpaySdkPlugin.kt
         └── oppwa.mobile AAR + ipworks3ds AAR
@@ -42,12 +42,14 @@ Dart API (lib/hyperpay_sdk.dart - HyperpaySdk class)
 
 ## Platform Requirements
 
-- **iOS:** min 13.0, Swift 5.0, static framework required (configured in podspec and example Podfile)
+- **iOS:** min 13.0, Swift 5.0, CocoaPods consumers need the static-framework Podfile hook (see README); SPM needs nothing
 - **Android:** minSdk 24, Java 17, Kotlin 2.0.21, Gradle 8.7.3
-- **Native SDK binaries** are not bundled in this repo — they are pulled from two companion repos:
-  - iOS: pod `hyperpay_sdk_ios` (version-matched to the OPPWA version, tag `7.11.0`) — https://github.com/hrvojecukman/hyperpay_sdk_ios
+- **iOS integration:** Swift Package Manager (`ios/hyperpay_sdk/Package.swift`) and CocoaPods (`ios/hyperpay_sdk.podspec`) are both supported. The example app uses SPM (`enable-swift-package-manager: true` in `example/pubspec.yaml`, no Podfile).
+- **Native SDK binaries** are not bundled in this repo — they are pulled from:
+  - iOS (CocoaPods): pod `hyperpay_sdk_ios` (version-matched to the OPPWA version, tag `7.11.0`) — https://github.com/hrvojecukman/hyperpay_sdk_ios
+  - iOS (SPM): the same xcframeworks, zipped (`ditto -c -k --keepParent X.xcframework X.xcframework.zip`) as assets on the `ios-binaries-<oppwa version>` release of https://github.com/Tkiyet-Um-Ali/hyperpay_sdk, referenced by URL + checksum (`swift package compute-checksum`) in `Package.swift`. Never replace an existing asset; publish a new release instead.
   - Android: JitPack `com.github.hrvojecukman.hyperpay_sdk_android:{oppwa,ipworks3ds,ipworks3ds_deploy}` (tag `v7.11.0.0`) — https://github.com/hrvojecukman/hyperpay_sdk_android
-  - Upgrading the native SDK means: swap the binaries in those two repos, bump + tag them, then bump `ios/hyperpay_sdk.podspec`, `android/build.gradle` and the example `Podfile`
+  - Upgrading the native SDK means: swap the binaries in those two repos, bump + tag them, publish a new `ios-binaries-<version>` release with the zips, then bump `ios/hyperpay_sdk.podspec`, `ios/hyperpay_sdk/Package.swift` (version + both checksums) and `android/build.gradle`
 
 ## Linting
 

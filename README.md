@@ -28,8 +28,8 @@ Flutter plugin wrapping the official **HyperPay (OPPWA) Mobile SDK v7.11.0** for
 | -------- | -------------------- |
 | iOS      | 13.0                 |
 | Android  | API 24 (Android 7.0) |
-| Flutter  | 3.0+                 |
-| Dart     | 3.0+                 |
+| Flutter  | 3.38+                |
+| Dart     | 3.10+                |
 
 ---
 
@@ -40,7 +40,7 @@ There are **2 steps** to integrate HyperPay into your Flutter app:
 1. Install the plugin
 2. Configure your Android and iOS projects
 
-> **Note:** The native HyperPay OPPWA SDK binaries (AARs and XCFrameworks) are fetched automatically at build time via JitPack (Android) and CocoaPods (iOS). No manual binary placement is required.
+> **Note:** The native HyperPay OPPWA SDK binaries (AARs and XCFrameworks) are fetched automatically at build time via JitPack (Android) and Swift Package Manager or CocoaPods (iOS). No manual binary placement is required.
 
 ### Step 1 — Install the Plugin
 
@@ -52,7 +52,7 @@ Or add manually to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  hyperpay_sdk: ^2.4.2
+  hyperpay_sdk: ^2.5.0
 ```
 
 Then run:
@@ -127,6 +127,20 @@ android {
 ```
 
 #### iOS
+
+The plugin supports both **Swift Package Manager** and **CocoaPods**. Flutter picks the integration automatically.
+
+**Swift Package Manager (recommended, on by default in recent Flutter).** If it is off, enable it either globally (`flutter config --enable-swift-package-manager`) or for your app only in `pubspec.yaml`:
+
+```yaml
+flutter:
+  config:
+    enable-swift-package-manager: true
+```
+
+No Podfile changes are needed: the HyperPay `OPPWAMobile` and `ipworks3ds_sdk` XCFrameworks are downloaded and checksum-verified by SPM, then embedded automatically. If your app previously used the CocoaPods setup below, remove the `hyperpay_sdk_ios` pod line and the static-framework `pre_install` hook from your Podfile (otherwise Xcode fails with *"Multiple commands produce …/OPPWAMobile.framework"*). If HyperPay was your only pod, run `pod deintegrate` in `ios/`. Then skip to step 3.
+
+**CocoaPods.** If you don't use Swift Package Manager:
 
 **1. Set deployment target** in `ios/Podfile`:
 

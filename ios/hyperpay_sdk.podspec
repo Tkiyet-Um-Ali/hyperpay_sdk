@@ -11,7 +11,8 @@ Supports ReadyUI, CustomUI, Apple Pay, tokenization, and 3DS2.
   s.author           = { 'Hrvoje Cukman' => 'hrvojecukman@gmail.com' }
   s.source           = { :path => '.' }
 
-  s.source_files     = 'Classes/**/*'
+  # Shared with Swift Package Manager (see hyperpay_sdk/Package.swift).
+  s.source_files     = 'hyperpay_sdk/Sources/hyperpay_sdk/**/*.swift'
 
   s.platform         = :ios, '13.0'
   s.swift_version    = '5.0'

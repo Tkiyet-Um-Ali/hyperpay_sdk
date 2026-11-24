@@ -4,7 +4,7 @@ import SafariServices
 import PassKit
 import OPPWAMobile
 
-public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
+public class HyperpaySdkPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDelegate {
 
     private var channel: FlutterMethodChannel?
     private var paymentProvider: OPPPaymentProvider?
@@ -24,7 +24,12 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
         let instance = HyperpaySdkPlugin()
         instance.channel = channel
         registrar.addMethodCallDelegate(instance, channel: channel)
+        // The shopper-result URL (async / 3DS return) arrives through the
+        // scene delegate in UIScene apps (the default since Flutter 3.38, and
+        // required by Xcode 27). Apps that haven't migrated still get it through
+        // the application delegate, so register for both.
         registrar.addApplicationDelegate(instance)
+        registrar.addSceneDelegate(instance)
     }
 
     // MARK: - MethodCallHandler
@@ -369,7 +374,10 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
         ]
 
         do {
-            let params = try OPPApplePayPaymentParams(
+            // Validates the checkout ID up front. The Apple Pay token only exists
+            // after authorization, so the real OPPApplePayPaymentParams (with
+            // tokenData) is built in paymentAuthorizationViewController(_:didAuthorizePayment:).
+            let params = try OPPPaymentParams(
                 checkoutID: checkoutId,
                 paymentBrand: "APPLEPAY"
             )
@@ -399,7 +407,7 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
         }
     }
 
-    private var pendingApplePayParams: OPPApplePayPaymentParams?
+    private var pendingApplePayParams: OPPPaymentParams?
     private var pendingApplePayProvider: OPPPaymentProvider?
     private var pendingApplePayDynamic: Bool = false
     /// True from the moment Apple Pay hands us an authorized token until the
@@ -576,11 +584,25 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
 
     // MARK: - URL Scheme Handling
 
+    /// UIScene lifecycle: iOS delivers URLs here instead of `application(_:open:options:)`.
+    public func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+        var handled = false
+        for context in URLContexts where handleShopperResultURL(context.url) {
+            handled = true
+        }
+        return handled
+    }
+
+    /// Legacy AppDelegate lifecycle (apps not yet migrated to UIScene).
     public func application(
         _ app: UIApplication,
         open url: URL,
         options: [UIApplication.OpenURLOptionsKey: Any] = [:]
     ) -> Bool {
+        return handleShopperResultURL(url)
+    }
+
+    private func handleShopperResultURL(_ url: URL) -> Bool {
         guard let shopperUrl = shopperResultUrl,
               url.scheme?.caseInsensitiveCompare(shopperUrl) == .orderedSame else {
             return false
@@ -635,16 +657,11 @@ public class HyperpaySdkPlugin: NSObject, FlutterPlugin {
 
 // MARK: - OPPCheckoutProviderDelegate
 
-extension HyperpaySdkPlugin: OPPCheckoutProviderDelegate {
-    public func checkoutProvider(
-        _ checkoutProvider: OPPCheckoutProvider,
-        continueSubmitting transaction: OPPTransaction,
-        completion: @escaping (String, Bool) -> Void
-    ) {
-        // Continue with the transaction by default
-        completion(transaction.resourcePath ?? "", true)
-    }
-}
+// All requirements are optional. Don't implement
+// checkoutProvider(_:continueSubmitting:completion:) unless you need to
+// re-create the checkout or abort: once implemented, the SDK waits for its
+// completion(checkoutID, abort) before every submission.
+extension HyperpaySdkPlugin: OPPCheckoutProviderDelegate {}
 
 // MARK: - SFSafariViewControllerDelegate
 
