@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../saved_cards_screen.dart';
 import '../services/payment_service.dart';
+import '../services/tua_api.dart';
+import '../tua_checkout/tua_checkout_screen.dart';
 import 'advanced_screen.dart';
 import '../widgets/custom_ui_bottom_sheet.dart';
 import '../widgets/payment_tile.dart';
@@ -47,6 +49,26 @@ class _HomeScreenState extends State<HomeScreen> {
                 : Colors.red,
       ),
     );
+  }
+
+  Future<void> _openTuaCheckout(
+    String locale, {
+    bool showItems = true,
+    bool allowSaveCard = false,
+  }) async {
+    final result = await TuaCheckoutScreen.open(
+      context,
+      locale: locale,
+      showItems: showItems,
+      allowSaveCard: allowSaveCard,
+    );
+    if (!mounted) return;
+    if (result == null) {
+      setState(() => _status = 'TUA checkout closed without paying');
+      return;
+    }
+    setState(() => _status = PaymentService.formatResult(result));
+    _showResultSnackBar(result);
   }
 
   Future<void> _payReadyUI() async {
@@ -144,6 +166,24 @@ class _HomeScreenState extends State<HomeScreen> {
             keyboardType: TextInputType.number,
           ),
           const SizedBox(height: 16),
+          if (TuaApi.isConfigured) ...[
+            PaymentTile(
+              icon: Icons.volunteer_activism,
+              title: 'TUA checkout',
+              subtitle: 'English · program list · save-card option',
+              onTap: _isLoading
+                  ? null
+                  : () => _openTuaCheckout('en', allowSaveCard: true),
+            ),
+            PaymentTile(
+              icon: Icons.translate,
+              title: 'TUA checkout (العربية)',
+              subtitle: 'Arabic, right to left · total only',
+              onTap: _isLoading
+                  ? null
+                  : () => _openTuaCheckout('ar', showItems: false),
+            ),
+          ],
           PaymentTile(
             icon: Icons.storefront,
             title: 'ReadyUI Checkout',
