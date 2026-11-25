@@ -11,6 +11,10 @@ class TuaCheckout {
   final String checkoutId;
   final List<String> brands;
 
+  /// Separate checkout for American Express cards (`hyperpay.amex`), when the
+  /// backend offers Amex.
+  final String? amexCheckoutId;
+
   /// `test` or `live` — must match `HyperpaySdk.setup(mode:)`.
   final String? mode;
   final String? paymentId;
@@ -22,6 +26,7 @@ class TuaCheckout {
   const TuaCheckout({
     required this.checkoutId,
     required this.brands,
+    this.amexCheckoutId,
     this.mode,
     this.paymentId,
     this.reference,
@@ -46,7 +51,32 @@ class TuaApiException implements Exception {
   String toString() => 'TuaApiException($statusCode): $message';
 }
 
-/// A payment's state on the backend.
+/// One program line of a payment.
+class TuaPaymentLine {
+  final String programName;
+  final String? optionTitle;
+  final int quantity;
+  final num unitAmount;
+  final num amount;
+
+  const TuaPaymentLine({
+    required this.programName,
+    this.optionTitle,
+    required this.quantity,
+    required this.unitAmount,
+    required this.amount,
+  });
+
+  factory TuaPaymentLine.fromMap(Map map) => TuaPaymentLine(
+        programName: map['programName']?.toString() ?? '',
+        optionTitle: map['optionTitle']?.toString(),
+        quantity: (map['quantity'] as num?)?.toInt() ?? 1,
+        unitAmount: map['unitAmount'] as num? ?? 0,
+        amount: map['amount'] as num? ?? 0,
+      );
+}
+
+/// A payment as `GET /v1/donations/payments/{paymentId}` returns it.
 class TuaPaymentOutcome {
   /// `pending`, `processing`, `succeeded`, `review`, `failed`, `expired` or
   /// `cancelled`.
@@ -59,21 +89,37 @@ class TuaPaymentOutcome {
   /// Whether `POST .../retry` is allowed (`retry.allowed`).
   final bool retryAllowed;
 
+  final String? reference;
+  final num? amount;
+  final String? currency;
+  final List<TuaPaymentLine> lines;
+
   const TuaPaymentOutcome({
     required this.status,
     this.failureMessage,
     this.failureReason,
     this.retryAllowed = false,
+    this.reference,
+    this.amount,
+    this.currency,
+    this.lines = const [],
   });
 
   factory TuaPaymentOutcome.fromMap(Map<String, dynamic> map) {
     final failure = map['failure'];
     final retry = map['retry'];
+    final lines = map['lines'];
     return TuaPaymentOutcome(
       status: map['status']?.toString() ?? 'unknown',
       failureMessage: failure is Map ? failure['message']?.toString() : null,
       failureReason: failure is Map ? failure['reason']?.toString() : null,
       retryAllowed: retry is Map && retry['allowed'] == true,
+      reference: map['reference']?.toString(),
+      amount: map['amount'] as num?,
+      currency: map['currency']?.toString(),
+      lines: lines is List
+          ? lines.whereType<Map>().map(TuaPaymentLine.fromMap).toList()
+          : const [],
     );
   }
 
@@ -160,6 +206,20 @@ class TuaApi {
       baseUrl.isNotEmpty &&
       (_env('TUA_ACCESS_TOKEN').isNotEmpty ||
           _env('TUA_REFRESH_TOKEN').isNotEmpty);
+
+  /// HTTP client override for tests and previews; null uses a new client per
+  /// request.
+  static http.Client? client;
+
+  static Future<http.Response> _withClient(
+      Future<http.Response> Function(http.Client c) run) async {
+    final c = client ?? http.Client();
+    try {
+      return await run(c);
+    } finally {
+      if (client == null) c.close();
+    }
+  }
 
   static Future<SharedPreferences> get _prefs =>
       SharedPreferences.getInstance();
@@ -381,16 +441,26 @@ class TuaApi {
     String paymentId, {
     int attempts = 6,
     Duration interval = const Duration(seconds: 2),
+    String? locale,
   }) async {
     late TuaPaymentOutcome outcome;
     for (var i = 0; i < attempts; i++) {
       if (i > 0) await Future<void>.delayed(interval);
-      final response = await _send('GET', '/v1/donations/payments/$paymentId');
-      outcome = TuaPaymentOutcome.fromMap(_decodeOrThrow(response));
+      outcome = await payment(paymentId, locale: locale);
       print('[TuaApi] Payment $paymentId: ${outcome.status}');
       if (!outcome.isOpen) break;
     }
     return outcome;
+  }
+
+  /// `GET /v1/donations/payments/{paymentId}` once: status, amount and the
+  /// program lines (names in [locale], `ar` or `en`).
+  static Future<TuaPaymentOutcome> payment(String paymentId,
+      {String? locale}) async {
+    final query = locale == null ? '' : '?locale=$locale';
+    final response =
+        await _send('GET', '/v1/donations/payments/$paymentId$query');
+    return TuaPaymentOutcome.fromMap(_decodeOrThrow(response));
   }
 
   /// `GET /v1/donations/payments/{paymentId}`: the checkout of a payment whose
@@ -440,7 +510,7 @@ class TuaApi {
         request.headers['Content-Type'] = 'application/json';
         request.body = jsonEncode(body);
       }
-      return request.send().then(http.Response.fromStream);
+      return _withClient((c) => c.send(request).then(http.Response.fromStream));
     }
 
     var response = await send(await _accessToken());
@@ -481,7 +551,9 @@ class TuaApi {
           response.statusCode, 'No hyperpay.checkoutId in ${response.body}');
     }
     final brands = hyperpay['brands'];
+    final amex = hyperpay['amex'];
     return TuaCheckout(
+      amexCheckoutId: amex is Map ? amex['checkoutId'] as String? : null,
       checkoutId: checkoutId,
       brands: brands is List
           ? brands.map((b) => b.toString()).toList()
@@ -510,14 +582,14 @@ class TuaApi {
       throw TuaApiException(
           401, 'Access token expired and no TUA_REFRESH_TOKEN');
     }
-    final response = await http.post(
-      Uri.parse('$baseUrl/v1/auth/refresh'),
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'client': 'mobile', 'refreshToken': refreshToken}),
-    );
+    final response = await _withClient((c) => c.post(
+          Uri.parse('$baseUrl/v1/auth/refresh'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'client': 'mobile', 'refreshToken': refreshToken}),
+        ));
     final data = _decode(response);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw TuaApiException(

@@ -226,6 +226,7 @@ The example creates checkouts through a backend, as a production app should: `Tu
 
 - `TUA_API_BASE_URL`, `TUA_ACCESS_TOKEN`, `TUA_REFRESH_TOKEN`: on a 401 the app calls `POST /v1/auth/refresh` (`client: mobile`) and stores the rotated tokens on the device.
 - `TUA_IDEMPOTENCY_KEY` (optional first key) and the donation body values (`TUA_PROGRAM_SLUG`, `TUA_OPTION_ID`, `TUA_PROFILE_ID`, …). The `Idempotency-Key` changes after every successful or failed payment, and when the backend reports the key as already used or the replayed checkout has expired.
+- **TUA checkout screen**: see [TUA checkout screen](#tua-checkout-screen) below.
 - After the SDK reports a submitted payment, `PaymentService.completePayment` reads the real outcome from `GET /v1/donations/payments/{id}`. The SDK's success only means the card form was submitted; a declined card or failed 3-D Secure check ends the same way.
 - A failed payment is tried again with `POST /v1/donations/payments/{id}/retry` on the next checkout, so it doesn't hold an open-checkout slot. On `429 payments.too_many_open_checkouts` the app resumes the oldest `pending` checkout from `openCheckouts` (`GET /v1/donations/payments/{id}`) or retries a `failed` one. The example does this without asking because all its checkouts are the same donation; a real app should let the donor choose between finishing it and cancelling it (`TuaApi.cancelPayment`).
 - `HYPERPAY_ENTITY_ID` / `HYPERPAY_ACCESS_TOKEN` are optional and **test-only**: only the saved-cards and "save card without paying" demos call HyperPay's REST API directly. Never ship a HyperPay access token in an app.
@@ -235,6 +236,67 @@ The example creates checkouts through a backend, as a production app should: `Tu
 ```sh
 flutter run
 ```
+
+---
+
+## TUA checkout screen
+
+The example app includes a ready-to-use donation checkout in the TUA design (`example/lib/tua_checkout/`). It gets the checkout from the Tua backend, shows the donation, takes the card with the plugin's `payCustomUI`, and confirms the result with the backend before reporting success.
+
+| Card form | Program list | Field errors | Arabic |
+| --- | --- | --- | --- |
+| ![TUA checkout](screenshots/tua_checkout_en.png) | ![Program list expanded](screenshots/tua_checkout_items.png) | ![Field errors](screenshots/tua_checkout_errors.png) | ![Arabic](screenshots/tua_checkout_ar.png) |
+
+```dart
+import 'tua_checkout/tua_checkout_screen.dart';
+
+final result = await TuaCheckoutScreen.open(
+  context,
+  locale: 'ar',
+  showItems: true,
+  allowSaveCard: true,
+);
+
+if (result == null) {
+  // The donor left without paying.
+} else if (result.isSuccess) {
+  // Paid, and confirmed with the backend.
+} else {
+  // Not paid: result.errorMessage says why.
+}
+```
+
+### Options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `locale` | `'en'` | `'en'` or `'ar'`. Arabic lays the screen out right to left; card digits and expiry stay left to right. The donor can also switch language from the top bar. |
+| `showItems` | `true` | Lists the donation's programs above the total. With several programs the first one is shown and an arrow expands the rest. `false` shows only the total, for apps that already showed the cart. |
+| `allowSaveCard` | `false` | Shows a "Save this card for future donations" checkbox. When ticked, the card is registered with HyperPay along with the payment (`tokenize`); your backend reads the registration ID from the payment result and stores it. |
+| `applePayMerchantId` | `TUA_APPLE_PAY_MERCHANT_ID` | Shows the Apple Pay button on iOS when the checkout offers `APPLEPAY`. |
+| `googlePayGatewayMerchantId` | `TUA_GOOGLE_PAY_GATEWAY_MERCHANT_ID` | Shows the Google Pay button on Android when the checkout offers `GOOGLEPAY`. |
+
+`TuaCheckoutScreen.open` reads the two wallet settings from `.env`. To pass them yourself, push `TuaCheckoutScreen(...)` directly.
+
+### Card validation
+
+| Field | Rules |
+| --- | --- |
+| Card number | Digits only (other characters can't be typed or pasted). 16 digits, or 15 for Amex grouped 4-6-5, and a valid Luhn checksum. The detected brand is shown in the field; a brand the checkout doesn't accept is rejected. |
+| Name on card | English letters, spaces and `. ' -` only, as printed on the card, with at least two letters. Other characters show an error as soon as they're typed. |
+| Expiry | `MM / YY`, a real month, not in the past. |
+| CVV | Digits only. 3 digits, or 4 for Amex. |
+
+The plugin's `validateCard` runs as a second check before the card is submitted.
+
+### Payment result
+
+- **Amex:** paid through the backend's separate Amex checkout (`hyperpay.amex`).
+- **Success:** the button turns green ("Paid. Thank you") and the screen closes with the result.
+- **Decline:** a red box shows the backend's message, for example "Your bank declined the payment. Try another card." The next attempt retries the same payment (`POST /v1/donations/payments/{id}/retry`).
+- **Other errors:** errors from the SDK are shown as a plain message, and the details are logged.
+
+The screen uses the TUA design tokens (`tua_theme.dart`) and the Cairo font, bundled in `example/assets/google_fonts/` (SIL Open Font License, see `OFL.txt` there) so it renders without a network request. All copy is in `tua_strings.dart`.
 
 ---
 

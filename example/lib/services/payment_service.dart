@@ -29,14 +29,17 @@ class PaymentService {
   /// because it only means the payment was submitted: a declined card or a
   /// failed 3-D Secure check ends the same way. A successful or failed payment
   /// rotates the `Idempotency-Key`; a cancelled one keeps it.
-  static Future<PaymentResult> completePayment(PaymentResult result) async {
+  static Future<PaymentResult> completePayment(
+    PaymentResult result, {
+    String? locale,
+  }) async {
     if (!TuaApi.isConfigured || result.isCanceled) return result;
 
     final paymentId = TuaApi.current?.paymentId;
     var verified = result;
     if (result.isSuccess && paymentId != null) {
       try {
-        final outcome = await TuaApi.paymentOutcome(paymentId);
+        final outcome = await TuaApi.paymentOutcome(paymentId, locale: locale);
         if (!outcome.isPaid) {
           verified = PaymentResult(
             isSuccess: false,
