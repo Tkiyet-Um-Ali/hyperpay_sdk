@@ -27,5 +27,6 @@ flutter:
   assets:
     - .env
     - assets/tua/
+    - assets/google_fonts/
   config:
     enable-swift-package-manager: true
