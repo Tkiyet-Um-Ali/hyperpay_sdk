@@ -1,3 +1,15 @@
+## 2.7.0
+
+- **TUA checkout screen in the plugin** (`import 'package:hyperpay_sdk/tua_checkout.dart'`). `TuaCheckoutScreen` moves from the example app into the plugin, so other apps can use it without copying files.
+  - **Backend through your own client:** the screen makes its backend calls through a `TuaCheckoutBackend` built on your app's authenticated client. `TuaRestBackend` needs only one request function and the donation body. Login and tokens stay in your app.
+  - **Flow logic in `TuaCheckoutSession`, covered by unit tests:**
+    - one Idempotency-Key per attempt;
+    - a failed payment is retried in place;
+    - every result is confirmed with the backend.
+  - **Unfinished donations:** on `payments.too_many_open_checkouts` the donor now chooses to continue an unfinished donation or cancel it and start over. Before, the example resumed one automatically. `onOpenCheckouts` overrides this.
+  - **Result:** the screen returns a `TuaCheckoutResult`. `isPaid` is confirmed by the backend, and it also carries the payment ID and reference.
+  - **Bundled assets:** the Cairo font (OFL) and the wallet marks now ship with the plugin, so `google_fonts` is no longer needed.
+
 ## 2.6.1
 
 - **Fix `requestBinInfo`** on iOS and Android. It always failed (iOS: `BIN_INFO_ERROR` "bad request (400)", code 3000; Android: "Malformed server response"), because the SDK needs the checkout info fetched right before. The plugin now fetches it before every lookup, and the error message says which of the two requests failed.

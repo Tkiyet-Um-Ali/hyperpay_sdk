@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:hyperpay_sdk/hyperpay_sdk.dart';
+import 'package:hyperpay_sdk/tua_checkout.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../saved_cards_screen.dart';
 import '../services/payment_service.dart';
 import '../services/tua_api.dart';
-import '../tua_checkout/tua_checkout_screen.dart';
 import 'advanced_screen.dart';
 import '../widgets/custom_ui_bottom_sheet.dart';
 import '../widgets/payment_tile.dart';
@@ -56,19 +57,35 @@ class _HomeScreenState extends State<HomeScreen> {
     bool showItems = true,
     bool allowSaveCard = false,
   }) async {
+    String? env(String key) {
+      final value = dotenv.env[key]?.trim();
+      return value == null || value.isEmpty ? null : value;
+    }
+
     final result = await TuaCheckoutScreen.open(
       context,
+      backend: TuaApi.checkoutBackend(),
+      shopperResultUrl: PaymentService.shopperResultUrl,
       locale: locale,
       showItems: showItems,
       allowSaveCard: allowSaveCard,
+      applePayMerchantId: env('TUA_APPLE_PAY_MERCHANT_ID'),
+      googlePayGatewayMerchantId: env('TUA_GOOGLE_PAY_GATEWAY_MERCHANT_ID'),
     );
     if (!mounted) return;
     if (result == null) {
       setState(() => _status = 'TUA checkout closed without paying');
       return;
     }
-    setState(() => _status = PaymentService.formatResult(result));
-    _showResultSnackBar(result);
+    setState(() => _status = result.isPaid
+        ? 'Paid · ${result.reference ?? result.paymentId}'
+        : 'Not paid (${result.payment?.status ?? 'unconfirmed'})');
+    _showResultSnackBar(result.isPaid
+        ? result.sdkResult
+        : PaymentResult.error(
+            errorCode: result.payment?.status ?? 'UNCONFIRMED',
+            errorMessage: result.payment?.failureMessage ?? 'Not paid',
+          ));
   }
 
   Future<void> _payReadyUI() async {

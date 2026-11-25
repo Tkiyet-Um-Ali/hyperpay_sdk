@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hyperpay_sdk_example/tua_checkout/card_input.dart';
+import 'package:hyperpay_sdk/tua_checkout.dart';
 
 TextEditingValue _type(TextInputFormatter f, String old, String next) =>
     f.formatEditUpdate(
@@ -11,8 +11,10 @@ TextEditingValue _type(TextInputFormatter f, String old, String next) =>
 void main() {
   test('card number keeps digits only and caps the length', () {
     final f = CardNumberFormatter();
-    expect(_type(f, '', '4200abc0000-0000 0000 9999').text,
-        '4200 0000 0000 0000');
+    expect(
+      _type(f, '', '4200abc0000-0000 0000 9999').text,
+      '4200 0000 0000 0000',
+    );
     expect(_type(f, '', '377777777777770123').text, '3777 777777 77770');
   });
 

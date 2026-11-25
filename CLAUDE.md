@@ -42,6 +42,8 @@ Dart API (lib/hyperpay_sdk.dart - HyperpaySdk class)
 
 **Data models** live in `lib/src/models/` (`toMap()` / `fromMap()` define the channel map shapes): `PaymentMode`, `PaymentResult`, `CheckoutInfo` / `StoredToken`, `GooglePayConfig`, `ApplePayConfig` (+ summary items, shipping), `CheckoutOptions`, `CheckoutTheme`, `ThreeDSConfig`, `payment_extras.dart` (before-submit, STC Pay, card validation, Klarna).
 
+**TUA checkout** (`lib/tua_checkout.dart`, sources in `lib/src/tua_checkout/`): a pure-Dart donation checkout UI for the Tua backend. `TuaCheckoutScreen` (UI) → `TuaCheckoutSession` (idempotency keys, retry, open-checkout handling, confirming results; unit-tested in `test/tua_checkout_session_test.dart`) → `TuaCheckoutBackend` (implemented by the app; `TuaRestBackend` wraps one request function). It must never hold tokens or HyperPay credentials. Cairo font (`fonts/cairo/`, OFL) and wallet marks (`assets/tua/`) are plugin assets: load them with `package: 'hyperpay_sdk'`.
+
 **Real native APIs:** trust the OPPWA 7.11.0 headers/swiftinterface (CocoaPods cache `hyperpay_sdk_ios/7.11.0-*`) and the Android AAR classes (`javap`) over HyperPay's web docs, which have typos and describe newer SDK versions.
 
 ## Platform Requirements
