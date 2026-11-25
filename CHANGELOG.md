@@ -2,6 +2,7 @@
 
 - **Fix `requestBinInfo`** on iOS and Android. It always failed (iOS: `BIN_INFO_ERROR` "bad request (400)", code 3000; Android: "Malformed server response"), because the SDK needs the checkout info fetched right before. The plugin now fetches it before every lookup, and the error message says which of the two requests failed.
 - **Example app**: creates checkouts through a backend (`TuaApi`) instead of holding HyperPay credentials, and confirms each payment's outcome with the backend, because the SDK's success only means the payment was submitted.
+- **Example app: TUA checkout screen** (`TuaCheckoutScreen`): a ready-to-use donation checkout in the TUA design. It has an expandable program list that can be turned off with `showItems`, and card fields that accept digits only in the number and CVV (length and Luhn checked) and English letters only in the name. It also has an optional "Save this card" checkbox (`allowSaveCard`), Apple Pay and Google Pay buttons, English and Arabic (right to left), and the bundled Cairo font. See the README's "TUA checkout screen" section.
 
 ## 2.6.0
 
