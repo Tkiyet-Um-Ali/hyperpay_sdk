@@ -34,7 +34,9 @@ abstract class _GroupingFormatter extends TextInputFormatter {
 
   @override
   TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
     var digits = digitsOnly(newValue.text);
     if (newValue.text.length < oldValue.text.length &&
         digits == digitsOnly(oldValue.text) &&

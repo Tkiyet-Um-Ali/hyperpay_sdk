@@ -3,76 +3,112 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:hyperpay_sdk/hyperpay_sdk.dart';
 
-import '../services/payment_service.dart';
-import '../services/tua_api.dart';
+import '../../hyperpay_sdk.dart';
 import 'card_input.dart';
+import 'tua_backend.dart';
+import 'tua_checkout_session.dart';
+import 'tua_models.dart';
 import 'tua_strings.dart';
 import 'tua_theme.dart';
 
-/// Ready-to-use TUA donation checkout, built from the "HyperPay Checkout Kit"
-/// design: the donation summary, Apple Pay / Google Pay when the checkout
-/// offers them, and a card form that pays with the HyperPay SDK
-/// (`payCustomUI`). The checkout comes from the Tua backend ([TuaApi]), and
-/// the result is confirmed with it before the screen reports success.
+/// Ready-to-use TUA donation checkout: the donation summary, Apple Pay /
+/// Google Pay when the checkout offers them, and a validated card form that
+/// pays with [HyperpaySdk.payCustomUI]. Checkouts come from the Tua backend
+/// through [backend]; every result is confirmed with it before the screen
+/// reports success.
+///
+/// Call `HyperpaySdk.setup(mode:)` first, with the mode the backend's
+/// checkouts use.
 ///
 /// ```dart
-/// final result = await TuaCheckoutScreen.open(context, locale: 'ar');
+/// final result = await TuaCheckoutScreen.open(
+///   context,
+///   backend: TuaRestBackend(send: mySend, checkoutBody: cart.toBody),
+///   shopperResultUrl: 'com.example.app.payments',
+///   locale: 'ar',
+/// );
+/// if (result?.isPaid == true) showThankYou(result!.reference);
 /// ```
 class TuaCheckoutScreen extends StatefulWidget {
   const TuaCheckoutScreen({
     super.key,
+    required this.backend,
+    required this.shopperResultUrl,
     this.locale = 'en',
-    this.applePayMerchantId,
-    this.googlePayGatewayMerchantId,
     this.showItems = true,
     this.allowSaveCard = false,
+    this.applePayMerchantId,
+    this.googlePayGatewayMerchantId,
+    this.merchantName = 'Tkiyet Um Ali',
+    this.countryCode = 'JO',
+    this.onOpenCheckouts,
   });
 
+  /// The Tua backend calls, made with your app's authenticated client.
+  final TuaCheckoutBackend backend;
+
+  /// Your app's payment return URL scheme (used for 3-D Secure redirects).
+  final String shopperResultUrl;
+
+  /// `en` or `ar` (right to left). The donor can switch from the top bar.
+  final String locale;
+
   /// Lists the donation's program lines above the total. With several lines
-  /// the first is shown and an arrow expands the rest. Set to false to show
-  /// only the total (e.g. when your app already showed the cart).
+  /// the first is shown and an arrow expands the rest. `false` shows only the
+  /// total, e.g. when your app already showed the cart.
   final bool showItems;
 
   /// Shows a "Save this card for future donations" checkbox. When ticked the
   /// card is registered with HyperPay along with the payment (`tokenize`);
-  /// your backend then reads the registration ID from the payment result.
+  /// your backend reads the registration ID from the payment result.
   final bool allowSaveCard;
-
-  /// `en` or `ar`.
-  final String locale;
 
   /// Shows Apple Pay (iOS) when set and the checkout offers `APPLEPAY`.
   final String? applePayMerchantId;
 
   /// Shows Google Pay (Android) when set and the checkout offers `GOOGLEPAY`.
-  /// This is the HyperPay entity ID that receives Google Pay payments.
+  /// The HyperPay entity ID that receives Google Pay payments.
   final String? googlePayGatewayMerchantId;
 
-  /// Opens the checkout and returns the confirmed result, or `null` when the
-  /// donor leaves without paying. Wallet settings default to `.env`
-  /// (`TUA_APPLE_PAY_MERCHANT_ID`, `TUA_GOOGLE_PAY_GATEWAY_MERCHANT_ID`).
-  static Future<PaymentResult?> open(
+  /// Shown on the Apple Pay / Google Pay sheets.
+  final String merchantName;
+  final String countryCode;
+
+  /// Decides what happens when the donor already has unfinished donations
+  /// (`payments.too_many_open_checkouts`). By default the screen asks the
+  /// donor to continue one or start over.
+  final TuaOpenCheckoutsHandler? onOpenCheckouts;
+
+  /// Pushes the screen and returns the result, or `null` when the donor
+  /// leaves without paying. Use [TuaCheckoutResult.isPaid]: it is confirmed
+  /// by the backend.
+  static Future<TuaCheckoutResult?> open(
     BuildContext context, {
+    required TuaCheckoutBackend backend,
+    required String shopperResultUrl,
     String locale = 'en',
     bool showItems = true,
     bool allowSaveCard = false,
+    String? applePayMerchantId,
+    String? googlePayGatewayMerchantId,
+    String merchantName = 'Tkiyet Um Ali',
+    String countryCode = 'JO',
+    TuaOpenCheckoutsHandler? onOpenCheckouts,
   }) {
-    String? env(String key) {
-      final value = dotenv.env[key]?.trim();
-      return value == null || value.isEmpty ? null : value;
-    }
-
-    return Navigator.of(context).push<PaymentResult>(
+    return Navigator.of(context).push<TuaCheckoutResult>(
       MaterialPageRoute(
         builder: (_) => TuaCheckoutScreen(
+          backend: backend,
+          shopperResultUrl: shopperResultUrl,
           locale: locale,
           showItems: showItems,
           allowSaveCard: allowSaveCard,
-          applePayMerchantId: env('TUA_APPLE_PAY_MERCHANT_ID'),
-          googlePayGatewayMerchantId: env('TUA_GOOGLE_PAY_GATEWAY_MERCHANT_ID'),
+          applePayMerchantId: applePayMerchantId,
+          googlePayGatewayMerchantId: googlePayGatewayMerchantId,
+          merchantName: merchantName,
+          countryCode: countryCode,
+          onOpenCheckouts: onOpenCheckouts,
         ),
       ),
     );
@@ -90,14 +126,11 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
   late String _locale = widget.locale;
   TuaStrings get _s => TuaStrings(_locale);
 
+  late final _session = TuaCheckoutSession(widget.backend);
   TuaCheckout? _checkout;
-  TuaPaymentOutcome? _payment;
+  TuaPayment? _payment;
   bool _loading = true;
   String? _loadError;
-
-  /// After a failed attempt the next one needs a fresh HyperPay checkout
-  /// (the backend retries the same payment).
-  bool _needsNewCheckout = false;
   bool _showAllLines = false;
 
   final _number = TextEditingController();
@@ -136,34 +169,98 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
       _loadError = null;
     });
     try {
-      final checkout = await TuaApi.createCheckout();
-      PaymentService.checkoutBrands = checkout.brands;
+      final checkout = await _session.start(
+        onOpenCheckouts: widget.onOpenCheckouts ?? _askOpenCheckouts,
+      );
       final payment = await _readPayment(checkout);
       if (!mounted) return;
       setState(() {
         _checkout = checkout;
         _payment = payment;
-        _needsNewCheckout = false;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _loadError = e is TuaApiException ? e.message : '$e';
+        _loadError = _messageFor(e);
         _loading = false;
       });
     }
   }
 
+  String _messageFor(Object e) {
+    if (e is TuaOpenCheckoutsException && e.retryAfterSeconds != null) {
+      return '${e.message} ${_s.tryAgainIn(e.retryAfterSeconds!)}';
+    }
+    if (e is TuaBackendException) return e.message;
+    debugPrint('[TuaCheckout] $e');
+    return _s.paymentFailed;
+  }
+
+  /// Asks the donor what to do with their unfinished donations.
+  Future<TuaOpenCheckoutChoice> _askOpenCheckouts(
+    List<TuaOpenCheckout> open,
+  ) async {
+    if (!mounted) return TuaOpenCheckoutChoice.dismiss;
+    final s = _s;
+    final choice = await showDialog<TuaOpenCheckoutChoice>(
+      context: context,
+      builder: (ctx) => Theme(
+        data: tuaTheme(ctx),
+        child: Directionality(
+          textDirection: s.direction,
+          child: AlertDialog(
+            backgroundColor: TuaColors.surface,
+            title: Text(
+              s.openCheckoutsTitle,
+              style: TuaText.cairo(size: 18, weight: FontWeight.w700),
+            ),
+            content: Text(
+              s.openCheckoutsBody,
+              style: TuaText.cairo(size: 14, color: TuaColors.muted),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () =>
+                    Navigator.pop(ctx, TuaOpenCheckoutChoice.startOver),
+                child: Text(
+                  s.startOver,
+                  style: TuaText.cairo(
+                    size: 14,
+                    weight: FontWeight.w600,
+                    color: TuaColors.muted,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () =>
+                    Navigator.pop(ctx, TuaOpenCheckoutChoice.resume),
+                child: Text(
+                  s.continueDonation,
+                  style: TuaText.cairo(
+                    size: 14,
+                    weight: FontWeight.w700,
+                    color: TuaColors.brand,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return choice ?? TuaOpenCheckoutChoice.dismiss;
+  }
+
   /// Program lines for the summary, in the current language. The summary
   /// falls back to the checkout's total if this read fails.
-  Future<TuaPaymentOutcome?> _readPayment(TuaCheckout checkout) async {
+  Future<TuaPayment?> _readPayment(TuaCheckout checkout) async {
     final id = checkout.paymentId;
     if (id == null) return null;
     try {
-      return await TuaApi.payment(id, locale: _locale);
+      return await widget.backend.getPayment(id, locale: _locale);
     } catch (e) {
-      print('[TuaCheckout] Could not read the payment lines: $e');
+      debugPrint('[TuaCheckout] Could not read the payment lines: $e');
       return null;
     }
   }
@@ -249,7 +346,7 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
           errors.putIfAbsent(_Field.holder, () => _s.cardHolderError);
         }
       } catch (e) {
-        print('[TuaCheckout] validateCard failed: $e');
+        debugPrint('[TuaCheckout] validateCard failed: $e');
       }
     }
     return errors;
@@ -296,19 +393,21 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
 
     final brand = CardBrand.detect(digitsOnly(_number.text))!;
     final expiry = digitsOnly(_expiry.text);
-    await _pay((checkout) => HyperpaySdk.payCustomUI(
-          checkoutId: brand == CardBrand.amex
-              ? checkout.amexCheckoutId!
-              : checkout.checkoutId,
-          brand: brand.hyperpayBrand,
-          cardNumber: digitsOnly(_number.text),
-          holder: _holder.text.trim(),
-          expiryMonth: expiry.substring(0, 2),
-          expiryYear: '20${expiry.substring(2)}',
-          cvv: _cvv.text,
-          shopperResultUrl: PaymentService.shopperResultUrl,
-          tokenize: widget.allowSaveCard && _saveCard,
-        ));
+    await _pay(
+      (checkout) => HyperpaySdk.payCustomUI(
+        checkoutId: brand == CardBrand.amex
+            ? checkout.amexCheckoutId!
+            : checkout.checkoutId,
+        brand: brand.hyperpayBrand,
+        cardNumber: digitsOnly(_number.text),
+        holder: _holder.text.trim(),
+        expiryMonth: expiry.substring(0, 2),
+        expiryYear: '20${expiry.substring(2)}',
+        cvv: _cvv.text,
+        shopperResultUrl: widget.shopperResultUrl,
+        tokenize: widget.allowSaveCard && _saveCard,
+      ),
+    );
   }
 
   Future<void> _payWithWallet(String brand) async {
@@ -319,82 +418,87 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
       _wallet = brand;
       _declined = null;
     });
-    await _pay((checkout) => HyperpaySdk.checkoutReadyUI(
-          checkoutId: checkout.checkoutId,
-          brands: [brand],
-          paymentBrand: brand,
-          lang: _locale,
-          shopperResultUrl: PaymentService.shopperResultUrl,
-          applePayConfig: brand == 'APPLEPAY'
-              ? ApplePayConfig(
-                  merchantId: widget.applePayMerchantId!,
-                  countryCode: 'JO',
-                  currencyCode: currency,
-                  amount: amount,
-                  companyName: 'Tkiyet Um Ali',
-                  supportedNetworks: const ['amex', 'masterCard', 'visa'],
-                )
-              : null,
-          googlePayConfig: brand == 'GOOGLEPAY'
-              ? GooglePayConfig(
-                  gatewayMerchantId: widget.googlePayGatewayMerchantId!,
-                  merchantName: 'Tkiyet Um Ali',
-                  countryCode: 'JO',
-                  totalPrice: amount,
-                  currencyCode: currency,
-                  allowedCardNetworks: const ['AMEX', 'MASTERCARD', 'VISA'],
-                )
-              : null,
-        ));
+    await _pay(
+      (checkout) => HyperpaySdk.checkoutReadyUI(
+        checkoutId: checkout.checkoutId,
+        brands: [brand],
+        paymentBrand: brand,
+        lang: _locale,
+        shopperResultUrl: widget.shopperResultUrl,
+        applePayConfig: brand == 'APPLEPAY'
+            ? ApplePayConfig(
+                merchantId: widget.applePayMerchantId!,
+                countryCode: widget.countryCode,
+                currencyCode: currency,
+                amount: amount,
+                companyName: widget.merchantName,
+                supportedNetworks: const ['amex', 'masterCard', 'visa'],
+              )
+            : null,
+        googlePayConfig: brand == 'GOOGLEPAY'
+            ? GooglePayConfig(
+                gatewayMerchantId: widget.googlePayGatewayMerchantId!,
+                merchantName: widget.merchantName,
+                countryCode: widget.countryCode,
+                totalPrice: amount,
+                currencyCode: currency,
+                allowedCardNetworks: const ['AMEX', 'MASTERCARD', 'VISA'],
+              )
+            : null,
+      ),
+    );
     if (mounted) setState(() => _wallet = null);
   }
 
   /// Runs one payment attempt and confirms it with the backend.
   Future<void> _pay(
-      Future<PaymentResult> Function(TuaCheckout checkout) submit) async {
+    Future<PaymentResult> Function(TuaCheckout checkout) submit,
+  ) async {
     setState(() => _payState = _PayState.processing);
     try {
-      if (_needsNewCheckout || _checkout == null) {
-        final checkout = await TuaApi.createCheckout();
-        _checkout = checkout;
-        _needsNewCheckout = false;
-      }
-      final sdkResult = await submit(_checkout!);
+      final checkout =
+          _session.checkout ??
+          await _session.start(
+            onOpenCheckouts: widget.onOpenCheckouts ?? _askOpenCheckouts,
+          );
+      _checkout = checkout;
+      final sdkResult = await submit(checkout);
       if (sdkResult.isCanceled) {
         if (mounted) setState(() => _payState = _PayState.idle);
         return;
       }
-      final result =
-          await PaymentService.completePayment(sdkResult, locale: _locale);
+      final result = await _session.finish(sdkResult, locale: _locale);
       if (!mounted) return;
-      if (result.isSuccess) {
+      if (result.isPaid) {
         HapticFeedback.mediumImpact();
         setState(() => _payState = _PayState.paid);
         await Future<void>.delayed(const Duration(milliseconds: 1600));
         if (mounted) Navigator.of(context).pop(result);
-      } else {
-        // Backend outcomes (PAYMENT_*) carry a message written for donors;
-        // raw SDK errors don't, so show a plain one and log the details.
-        final fromBackend = result.errorCode?.startsWith('PAYMENT_') == true;
-        if (!fromBackend) {
-          print('[TuaCheckout] Payment failed: ${result.errorCode} '
-              '${result.errorMessage}');
-        }
-        setState(() {
-          _payState = _PayState.idle;
-          _needsNewCheckout = true;
-          _declined = fromBackend && result.errorMessage != null
-              ? result.errorMessage
-              : _s.paymentFailed;
-        });
+        return;
       }
-    } catch (e) {
-      if (!mounted) return;
-      print('[TuaCheckout] Payment error: $e');
+      final payment = result.payment;
+      if (payment?.failureMessage == null) {
+        debugPrint(
+          '[TuaCheckout] Not paid: status=${payment?.status} '
+          'sdk=${sdkResult.errorCode} ${sdkResult.errorMessage}',
+        );
+      }
       setState(() {
         _payState = _PayState.idle;
-        _needsNewCheckout = true;
-        _declined = e is TuaApiException ? e.message : _s.paymentFailed;
+        _declined =
+            payment?.failureMessage ??
+            (payment != null &&
+                    (payment.status == 'processing' ||
+                        payment.status == 'review' ||
+                        (payment.status == 'pending' && sdkResult.isSuccess))
+                ? _s.notConfirmed
+                : _s.paymentFailed);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _payState = _PayState.idle;
+        _declined = _messageFor(e);
       });
     }
   }
@@ -420,7 +524,10 @@ class _TuaCheckoutScreenState extends State<TuaCheckoutScreen> {
                 child: Text(
                   s.isArabic ? 'English' : 'العربية',
                   style: TuaText.cairo(
-                      size: 14, weight: FontWeight.w600, color: Colors.white),
+                    size: 14,
+                    weight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ],
@@ -622,7 +729,7 @@ class _Summary extends StatelessWidget {
   });
 
   final TuaStrings s;
-  final TuaPaymentOutcome? payment;
+  final TuaPayment? payment;
   final String? amount;
   final String? currency;
   final bool showItems;
@@ -650,7 +757,10 @@ class _Summary extends StatelessWidget {
             Text(
               s.summaryHead(lines.length),
               style: TuaText.cairo(
-                  size: 13, weight: FontWeight.w600, color: white78),
+                size: 13,
+                weight: FontWeight.w600,
+                color: white78,
+              ),
             ),
           AnimatedSize(
             duration: const Duration(milliseconds: 200),
@@ -670,18 +780,20 @@ class _Summary extends StatelessWidget {
                               Text(
                                 line.programName,
                                 style: TuaText.cairo(
-                                    size: 15,
-                                    weight: FontWeight.w600,
-                                    color: Colors.white,
-                                    height: 1.4),
+                                  size: 15,
+                                  weight: FontWeight.w600,
+                                  color: Colors.white,
+                                  height: 1.4,
+                                ),
                               ),
                               Text(
                                 '${line.quantity} × ${line.unitAmount.toStringAsFixed(2)} ${s.currency(currency)}',
                                 textDirection: TextDirection.ltr,
                                 style: TuaText.cairo(
-                                    size: 13,
-                                    color: white70,
-                                    features: TuaText.tabular),
+                                  size: 13,
+                                  color: white70,
+                                  features: TuaText.tabular,
+                                ),
                               ),
                             ],
                           ),
@@ -690,10 +802,11 @@ class _Summary extends StatelessWidget {
                         Text(
                           line.amount.toStringAsFixed(2),
                           style: TuaText.cairo(
-                              size: 15,
-                              weight: FontWeight.w600,
-                              color: Colors.white,
-                              features: TuaText.tabular),
+                            size: 15,
+                            weight: FontWeight.w600,
+                            color: Colors.white,
+                            features: TuaText.tabular,
+                          ),
                         ),
                       ],
                     ),
@@ -715,16 +828,20 @@ class _Summary extends StatelessWidget {
                       Text(
                         fold ? s.more(lines.length - 1) : s.less,
                         style: TuaText.cairo(
-                            size: 13,
-                            weight: FontWeight.w600,
-                            color: TuaColors.accent),
+                          size: 13,
+                          weight: FontWeight.w600,
+                          color: TuaColors.accent,
+                        ),
                       ),
                       const SizedBox(width: 4),
                       AnimatedRotation(
                         turns: fold ? 0 : .5,
                         duration: const Duration(milliseconds: 200),
-                        child: const Icon(Icons.keyboard_arrow_down,
-                            size: 20, color: TuaColors.accent),
+                        child: const Icon(
+                          Icons.keyboard_arrow_down,
+                          size: 20,
+                          color: TuaColors.accent,
+                        ),
                       ),
                     ],
                   ),
@@ -737,7 +854,8 @@ class _Summary extends StatelessWidget {
             decoration: lines.isEmpty
                 ? null
                 : const BoxDecoration(
-                    border: Border(top: BorderSide(color: Color(0x2EFFFFFF)))),
+                    border: Border(top: BorderSide(color: Color(0x2EFFFFFF))),
+                  ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -747,24 +865,28 @@ class _Summary extends StatelessWidget {
                   const _Bar(width: 120, height: 30, dark: true)
                 else
                   Text.rich(
-                    TextSpan(children: [
-                      TextSpan(
-                        text: amount,
-                        style: TuaText.cairo(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: amount,
+                          style: TuaText.cairo(
                             size: 30,
                             weight: FontWeight.w800,
                             color: Colors.white,
                             height: 1.2,
-                            features: TuaText.tabular),
-                      ),
-                      TextSpan(
-                        text: '  ${s.currency(currency)}',
-                        style: TuaText.cairo(
+                            features: TuaText.tabular,
+                          ),
+                        ),
+                        TextSpan(
+                          text: '  ${s.currency(currency)}',
+                          style: TuaText.cairo(
                             size: 15,
                             weight: FontWeight.w600,
-                            color: TuaColors.accent),
-                      ),
-                    ]),
+                            color: TuaColors.accent,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
               ],
             ),
@@ -847,7 +969,10 @@ class _TuaFieldState extends State<_TuaField> {
           child: Text(
             widget.label,
             style: TuaText.cairo(
-                size: 13, weight: FontWeight.w600, color: TuaColors.ink2),
+              size: 13,
+              weight: FontWeight.w600,
+              color: TuaColors.ink2,
+            ),
           ),
         ),
         AnimatedContainer(
@@ -857,15 +982,15 @@ class _TuaFieldState extends State<_TuaField> {
             color: hasError
                 ? TuaColors.errorBg
                 : focused
-                    ? TuaColors.surface
-                    : TuaColors.field,
+                ? TuaColors.surface
+                : TuaColors.field,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: hasError
                   ? TuaColors.error
                   : focused
-                      ? TuaColors.brand
-                      : TuaColors.line,
+                  ? TuaColors.brand
+                  : TuaColors.line,
             ),
             boxShadow: focused && !hasError
                 ? const [BoxShadow(color: TuaColors.accent, spreadRadius: 3)]
@@ -883,8 +1008,9 @@ class _TuaFieldState extends State<_TuaField> {
                 autofillHints: widget.autofillHints,
                 textCapitalization: widget.textCapitalization,
                 textDirection: widget.ltr ? TextDirection.ltr : null,
-                textAlign:
-                    widget.ltr && rtl ? TextAlign.right : TextAlign.start,
+                textAlign: widget.ltr && rtl
+                    ? TextAlign.right
+                    : TextAlign.start,
                 onChanged: widget.onChanged,
                 style: TuaText.cairo(
                   size: 16, // 16px keeps iOS from zooming
@@ -915,10 +1041,11 @@ class _TuaFieldState extends State<_TuaField> {
                     child: Text(
                       widget.trailing!,
                       style: TuaText.cairo(
-                          size: 12,
-                          weight: FontWeight.w700,
-                          color: TuaColors.brand,
-                          letterSpacing: .5),
+                        size: 12,
+                        weight: FontWeight.w700,
+                        color: TuaColors.brand,
+                        letterSpacing: .5,
+                      ),
                     ),
                   ),
                 ),
@@ -928,8 +1055,10 @@ class _TuaFieldState extends State<_TuaField> {
         if (widget.helper != null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(widget.helper!,
-                style: TuaText.cairo(size: 12, color: TuaColors.muted)),
+            child: Text(
+              widget.helper!,
+              style: TuaText.cairo(size: 12, color: TuaColors.muted),
+            ),
           ),
         if (hasError)
           Padding(
@@ -937,7 +1066,10 @@ class _TuaFieldState extends State<_TuaField> {
             child: Text(
               widget.error!,
               style: TuaText.cairo(
-                  size: 12, weight: FontWeight.w600, color: TuaColors.error),
+                size: 12,
+                weight: FontWeight.w600,
+                color: TuaColors.error,
+              ),
             ),
           ),
       ],
@@ -1006,17 +1138,20 @@ class _PayButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = TuaText.cairo(
-        size: 16, weight: FontWeight.w700, color: TuaColors.brandInk);
+      size: 16,
+      weight: FontWeight.w700,
+      color: TuaColors.brandInk,
+    );
     final Widget content = switch (state) {
       _PayState.idle => Text(label, style: style),
       _PayState.processing => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const _Spinner(color: TuaColors.brandInk),
-            const SizedBox(width: 10),
-            Text(processing, style: style),
-          ],
-        ),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _Spinner(color: TuaColors.brandInk),
+          const SizedBox(width: 10),
+          Text(processing, style: style),
+        ],
+      ),
       _PayState.paid => Text('✓ $paid', style: style),
     };
     return _Pressable(
@@ -1030,8 +1165,9 @@ class _PayButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           color: state == _PayState.paid
               ? TuaColors.ok
-              : TuaColors.brand
-                  .withValues(alpha: state == _PayState.processing ? .75 : 1),
+              : TuaColors.brand.withValues(
+                  alpha: state == _PayState.processing ? .75 : 1,
+                ),
         ),
         child: content,
       ),
@@ -1069,29 +1205,31 @@ class _WalletButton extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-              color: google ? const Color(0xFF747775) : Colors.black),
+            color: google ? const Color(0xFF747775) : Colors.black,
+          ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: paid
               ? [Text('✓ ${s.paid}', style: style)]
               : busy
-                  ? [
-                      _Spinner(color: ink),
-                      const SizedBox(width: 8),
-                      Text(s.processing, style: style),
-                    ]
-                  : [
-                      Text(label, style: style),
-                      const SizedBox(width: 8),
-                      Image.asset(
-                        google
-                            ? 'assets/tua/google_pay.png'
-                            : 'assets/tua/apple_pay.png',
-                        height: 22,
-                        semanticLabel: google ? 'Google Pay' : 'Apple Pay',
-                      ),
-                    ],
+              ? [
+                  _Spinner(color: ink),
+                  const SizedBox(width: 8),
+                  Text(s.processing, style: style),
+                ]
+              : [
+                  Text(label, style: style),
+                  const SizedBox(width: 8),
+                  Image.asset(
+                    google
+                        ? 'assets/tua/google_pay.png'
+                        : 'assets/tua/apple_pay.png',
+                    height: 22,
+                    package: TuaText.fontPackage,
+                    semanticLabel: google ? 'Google Pay' : 'Apple Pay',
+                  ),
+                ],
         ),
       ),
     );
@@ -1113,8 +1251,10 @@ class _OrDivider extends StatelessWidget {
           const Expanded(child: Divider(color: TuaColors.line, height: 1)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(text,
-                style: TuaText.cairo(size: 13, color: TuaColors.muted)),
+            child: Text(
+              text,
+              style: TuaText.cairo(size: 13, color: TuaColors.muted),
+            ),
           ),
           const Expanded(child: Divider(color: TuaColors.line, height: 1)),
         ],
@@ -1148,13 +1288,18 @@ class _DeclinedBanner extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title,
-                      style: TuaText.cairo(
-                          size: 14,
-                          weight: FontWeight.w700,
-                          color: TuaColors.error)),
-                  Text(message,
-                      style: TuaText.cairo(size: 13, color: TuaColors.ink2)),
+                  Text(
+                    title,
+                    style: TuaText.cairo(
+                      size: 14,
+                      weight: FontWeight.w700,
+                      color: TuaColors.error,
+                    ),
+                  ),
+                  Text(
+                    message,
+                    style: TuaText.cairo(size: 13, color: TuaColors.ink2),
+                  ),
                 ],
               ),
             ),
@@ -1181,9 +1326,11 @@ class _Trust extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Flexible(
-          child: Text(text,
-              textAlign: TextAlign.center,
-              style: TuaText.cairo(size: 12, color: TuaColors.muted)),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TuaText.cairo(size: 12, color: TuaColors.muted),
+          ),
         ),
       ],
     );
@@ -1196,10 +1343,10 @@ class _Spinner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        width: 16,
-        height: 16,
-        child: CircularProgressIndicator(strokeWidth: 2, color: color),
-      );
+    width: 16,
+    height: 16,
+    child: CircularProgressIndicator(strokeWidth: 2, color: color),
+  );
 }
 
 class _Bar extends StatelessWidget {
@@ -1210,13 +1357,13 @@ class _Bar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          color: dark ? const Color(0x26FFFFFF) : TuaColors.field,
-          borderRadius: BorderRadius.circular(8),
-        ),
-      );
+    width: width,
+    height: height,
+    decoration: BoxDecoration(
+      color: dark ? const Color(0x26FFFFFF) : TuaColors.field,
+      borderRadius: BorderRadius.circular(8),
+    ),
+  );
 }
 
 /// Same height as the form, so nothing jumps when the checkout arrives.
@@ -1226,13 +1373,13 @@ class _FormSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget field() => const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _Bar(width: 90, height: 14),
-            SizedBox(height: 8),
-            _Bar(width: double.infinity, height: 48),
-          ],
-        );
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Bar(width: 90, height: 14),
+        SizedBox(height: 8),
+        _Bar(width: double.infinity, height: 48),
+      ],
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(22, 18, 22, 20),
       child: Column(
@@ -1241,11 +1388,13 @@ class _FormSkeleton extends StatelessWidget {
           const SizedBox(height: 16),
           field(),
           const SizedBox(height: 16),
-          Row(children: [
-            Expanded(child: field()),
-            const SizedBox(width: 12),
-            Expanded(child: field()),
-          ]),
+          Row(
+            children: [
+              Expanded(child: field()),
+              const SizedBox(width: 12),
+              Expanded(child: field()),
+            ],
+          ),
           const SizedBox(height: 46),
           const _Bar(width: double.infinity, height: 48),
         ],
@@ -1255,8 +1404,11 @@ class _FormSkeleton extends StatelessWidget {
 }
 
 class _LoadError extends StatelessWidget {
-  const _LoadError(
-      {required this.s, required this.message, required this.onRetry});
+  const _LoadError({
+    required this.s,
+    required this.message,
+    required this.onRetry,
+  });
   final TuaStrings s;
   final String message;
   final VoidCallback onRetry;
@@ -1271,13 +1423,17 @@ class _LoadError extends StatelessWidget {
           children: [
             const Icon(Icons.cloud_off, size: 40, color: TuaColors.muted),
             const SizedBox(height: 12),
-            Text(s.loadError,
-                textAlign: TextAlign.center,
-                style: TuaText.cairo(size: 17, weight: FontWeight.w700)),
+            Text(
+              s.loadError,
+              textAlign: TextAlign.center,
+              style: TuaText.cairo(size: 17, weight: FontWeight.w700),
+            ),
             const SizedBox(height: 6),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: TuaText.cairo(size: 13, color: TuaColors.muted)),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TuaText.cairo(size: 13, color: TuaColors.muted),
+            ),
             const SizedBox(height: 20),
             SizedBox(
               width: 200,
@@ -1298,8 +1454,11 @@ class _LoadError extends StatelessWidget {
 }
 
 class _SaveCardToggle extends StatelessWidget {
-  const _SaveCardToggle(
-      {required this.label, required this.value, required this.onChanged});
+  const _SaveCardToggle({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
   final String label;
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -1319,18 +1478,22 @@ class _SaveCardToggle extends StatelessWidget {
                 height: 24,
                 child: Checkbox(
                   value: value,
-                  onChanged:
-                      onChanged == null ? null : (v) => onChanged!(v ?? false),
+                  onChanged: onChanged == null
+                      ? null
+                      : (v) => onChanged!(v ?? false),
                   activeColor: TuaColors.brand,
                   side: const BorderSide(color: TuaColors.line, width: 1.5),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(label,
-                    style: TuaText.cairo(size: 14, color: TuaColors.ink2)),
+                child: Text(
+                  label,
+                  style: TuaText.cairo(size: 14, color: TuaColors.ink2),
+                ),
               ),
             ],
           ),

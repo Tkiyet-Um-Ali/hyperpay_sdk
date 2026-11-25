@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-/// English and Arabic copy for the TUA checkout.
+/// English and Arabic copy for the TUA checkout screen.
 class TuaStrings {
   final String locale;
   const TuaStrings(this.locale);
@@ -33,17 +33,17 @@ class TuaStrings {
   String get total => _t('Total', 'المجموع');
   String more(int n) => isArabic
       ? (n == 1
-          ? '+ برنامج آخر'
-          : n == 2
-              ? '+ برنامجان آخران'
-              : '+ $n برامج أخرى')
+            ? '+ برنامج آخر'
+            : n == 2
+            ? '+ برنامجان آخران'
+            : '+ $n برامج أخرى')
       : '+$n more ${n == 1 ? 'program' : 'programs'}';
   String get less => _t('Show fewer', 'عرض أقل');
 
   String get trust => _t(
-        'Card details go straight to HyperPay. We never see them.',
-        'تُرسل بيانات البطاقة مباشرة إلى HyperPay ولا نطّلع عليها.',
-      );
+    'Card details go straight to HyperPay. We never see them.',
+    'تُرسل بيانات البطاقة مباشرة إلى HyperPay ولا نطّلع عليها.',
+  );
   String get orByCard => _t('or donate by card', 'أو تبرّع بالبطاقة');
   String get donateWith => _t('Donate with', 'تبرّع عبر');
   String get processing => _t('Processing…', 'جارٍ المعالجة…');
@@ -54,12 +54,17 @@ class TuaStrings {
   String get cardNotAccepted =>
       _t('This card type isn\'t accepted', 'نوع البطاقة هذا غير مقبول');
   String get cardHolderError => _t(
-      'Enter the name exactly as on the card', 'أدخل الاسم كما هو على البطاقة');
+    'Enter the name exactly as on the card',
+    'أدخل الاسم كما هو على البطاقة',
+  );
   String get cardHolderEnglishOnly => _t(
-      'Use English letters, as printed on the card',
-      'استخدم الأحرف الإنجليزية كما هي مطبوعة على البطاقة');
-  String get saveCard => _t('Save this card for future donations',
-      'احفظ هذه البطاقة للتبرعات القادمة');
+    'Use English letters, as printed on the card',
+    'استخدم الأحرف الإنجليزية كما هي مطبوعة على البطاقة',
+  );
+  String get saveCard => _t(
+    'Save this card for future donations',
+    'احفظ هذه البطاقة للتبرعات القادمة',
+  );
   String get expiryError =>
       _t('Invalid expiry date', 'تاريخ الانتهاء غير صحيح');
   String get cvvError => _t('Invalid CVV', 'رمز CVV غير صحيح');
@@ -71,9 +76,27 @@ class TuaStrings {
       _t('We couldn\'t start the payment.', 'تعذّر بدء عملية الدفع.');
   String get tryAgain => _t('Try again', 'حاول مجدداً');
   String get paymentFailed => _t(
-        'The payment didn\'t go through. Check the card details or try another card.',
-        'لم تتم عملية الدفع. تحقّق من بيانات البطاقة أو جرّب بطاقة أخرى.',
-      );
+    'The payment didn\'t go through. Check the card details or try another card.',
+    'لم تتم عملية الدفع. تحقّق من بيانات البطاقة أو جرّب بطاقة أخرى.',
+  );
+  String get notConfirmed => _t(
+    'We couldn\'t confirm the payment yet. Check your donations before trying again.',
+    'لم نتمكّن من تأكيد الدفع بعد. راجع تبرّعاتك قبل المحاولة مجدداً.',
+  );
+  String tryAgainIn(int seconds) {
+    final minutes = (seconds / 60).ceil();
+    return _t('Try again in $minutes min.', 'حاول مجدداً بعد $minutes دقيقة.');
+  }
+
+  String get openCheckoutsTitle =>
+      _t('You have an unfinished donation', 'لديك تبرّع غير مكتمل');
+  String get openCheckoutsBody => _t(
+    'Continue it, or cancel it and start this donation instead.',
+    'أكمله، أو ألغِه وابدأ هذا التبرّع بدلاً منه.',
+  );
+  String get continueDonation => _t('Continue it', 'إكماله');
+  String get startOver => _t('Start this one', 'بدء هذا التبرّع');
+
   String get declinedTitle =>
       _t('Payment not completed', 'لم تكتمل عملية الدفع');
 }

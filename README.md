@@ -53,7 +53,7 @@ dependencies:
   hyperpay_sdk:
     git:
       url: https://github.com/Tkiyet-Um-Ali/hyperpay_sdk.git
-      ref: v2.6.1
+      ref: v2.7.0
 ```
 
 Then run:
@@ -241,17 +241,56 @@ flutter run
 
 ## TUA checkout screen
 
-The example app includes a ready-to-use donation checkout in the TUA design (`example/lib/tua_checkout/`). It gets the checkout from the Tua backend, shows the donation, takes the card with the plugin's `payCustomUI`, and confirms the result with the backend before reporting success.
+A ready-to-use donation checkout in the TUA design, part of the plugin since 2.7.0. It gets the checkout from the Tua backend, shows the donation, takes the card with the plugin's `payCustomUI` (or Apple Pay / Google Pay), and confirms the result with the backend before reporting success.
 
 | Card form | Program list | Field errors | Arabic |
 | --- | --- | --- | --- |
 | ![TUA checkout](screenshots/tua_checkout_en.png) | ![Program list expanded](screenshots/tua_checkout_items.png) | ![Field errors](screenshots/tua_checkout_errors.png) | ![Arabic](screenshots/tua_checkout_ar.png) |
 
+### 1. Connect your backend client
+
+The screen doesn't log anyone in or hold tokens. It makes the Tua backend calls through a `TuaCheckoutBackend`. The simplest one is `TuaRestBackend`: give it one function that sends a request with your app's authenticated client (base URL, `Authorization`, token refresh), and the donation body for the cart being paid.
+
 ```dart
-import 'tua_checkout/tua_checkout_screen.dart';
+import 'package:hyperpay_sdk/tua_checkout.dart';
+
+final backend = TuaRestBackend(
+  // Send with your own client. Return the status and the decoded JSON,
+  // and don't throw for HTTP error statuses.
+  send: (method, path, {body, headers}) async {
+    final response = await apiClient.request(
+      method,
+      path, // e.g. /v1/donations/checkout
+      json: body,
+      headers: headers, // includes Idempotency-Key on checkout
+    );
+    return TuaHttpResponse(response.statusCode, response.data);
+  },
+  // The body of POST /v1/donations/checkout for this donation.
+  // `client: mobile` is added for you.
+  checkoutBody: () => {
+    'source': 'cart',
+    'programSlug': cart.programSlug,
+    'programVersion': cart.programVersion,
+    'frequency': 'one_time',
+    'items': cart.items.map((i) => i.toJson()).toList(),
+    'currency': 'JOD',
+    'billing': donor.billing.toJson(),
+  },
+);
+```
+
+To use something other than REST, implement `TuaCheckoutBackend` yourself (`createCheckout`, `getPayment`, `retryPayment`, `cancelPayment`) and throw `TuaBackendException` for error answers.
+
+### 2. Open the screen
+
+```dart
+await HyperpaySdk.setup(mode: PaymentMode.live); // the mode your checkouts use
 
 final result = await TuaCheckoutScreen.open(
   context,
+  backend: backend,
+  shopperResultUrl: 'com.example.app.payments', // your payment URL scheme
   locale: 'ar',
   showItems: true,
   allowSaveCard: true,
@@ -259,10 +298,10 @@ final result = await TuaCheckoutScreen.open(
 
 if (result == null) {
   // The donor left without paying.
-} else if (result.isSuccess) {
-  // Paid, and confirmed with the backend.
+} else if (result.isPaid) {
+  // Confirmed by the backend. result.reference / result.paymentId
 } else {
-  // Not paid: result.errorMessage says why.
+  // Not paid. result.payment?.status says where it stands.
 }
 ```
 
@@ -270,13 +309,15 @@ if (result == null) {
 
 | Option | Default | What it does |
 | --- | --- | --- |
+| `backend` | required | The backend calls (see above). |
+| `shopperResultUrl` | required | Your payment return URL scheme, used for 3-D Secure redirects. |
 | `locale` | `'en'` | `'en'` or `'ar'`. Arabic lays the screen out right to left; card digits and expiry stay left to right. The donor can also switch language from the top bar. |
 | `showItems` | `true` | Lists the donation's programs above the total. With several programs the first one is shown and an arrow expands the rest. `false` shows only the total, for apps that already showed the cart. |
 | `allowSaveCard` | `false` | Shows a "Save this card for future donations" checkbox. When ticked, the card is registered with HyperPay along with the payment (`tokenize`); your backend reads the registration ID from the payment result and stores it. |
-| `applePayMerchantId` | `TUA_APPLE_PAY_MERCHANT_ID` | Shows the Apple Pay button on iOS when the checkout offers `APPLEPAY`. |
-| `googlePayGatewayMerchantId` | `TUA_GOOGLE_PAY_GATEWAY_MERCHANT_ID` | Shows the Google Pay button on Android when the checkout offers `GOOGLEPAY`. |
-
-`TuaCheckoutScreen.open` reads the two wallet settings from `.env`. To pass them yourself, push `TuaCheckoutScreen(...)` directly.
+| `applePayMerchantId` | none | Shows the Apple Pay button on iOS when the checkout offers `APPLEPAY`. |
+| `googlePayGatewayMerchantId` | none | Shows the Google Pay button on Android when the checkout offers `GOOGLEPAY` (the HyperPay entity ID for Google Pay). |
+| `merchantName`, `countryCode` | `'Tkiyet Um Ali'`, `'JO'` | Shown on the Apple Pay / Google Pay sheets. |
+| `onOpenCheckouts` | asks the donor | What to do when the backend refuses a new checkout because the donor has unfinished ones. See below. |
 
 ### Card validation
 
@@ -289,14 +330,19 @@ if (result == null) {
 
 The plugin's `validateCard` runs as a second check before the card is submitted.
 
-### Payment result
+### How payments are handled
 
+- **Idempotency-Key:** one per payment attempt. When the donor closes the card form and tries again, the same key returns the same checkout. A new key is used after a payment succeeds or fails, or when the backend says the key was already used or has expired.
+- **Confirmed results:** after the SDK returns, the screen reads `GET /v1/donations/payments/{id}`, repeating briefly while it is `pending` or `processing`. The SDK's own success only means the payment was submitted. Only `succeeded` closes the screen as paid.
+- **Declines:** a red box shows the backend's message, for example "Your bank declined the payment. Try another card." The next attempt retries the same payment (`POST .../retry`) instead of opening another checkout.
+- **Unfinished donations:** on `429 payments.too_many_open_checkouts` the donor chooses between continuing the oldest unfinished donation or cancelling it (`POST .../cancel`) and starting this one. Pass `onOpenCheckouts` to decide in code.
 - **Amex:** paid through the backend's separate Amex checkout (`hyperpay.amex`).
-- **Success:** the button turns green ("Paid. Thank you") and the screen closes with the result.
-- **Decline:** a red box shows the backend's message, for example "Your bank declined the payment. Try another card." The next attempt retries the same payment (`POST /v1/donations/payments/{id}/retry`).
-- **Other errors:** errors from the SDK are shown as a plain message, and the details are logged.
 
-The screen uses the TUA design tokens (`tua_theme.dart`) and the Cairo font, bundled in `example/assets/google_fonts/` (SIL Open Font License, see `OFL.txt` there) so it renders without a network request. All copy is in `tua_strings.dart`.
+`TuaCheckoutSession` runs the same flow without the UI, if you build your own screen.
+
+The screen uses the TUA design tokens and the Cairo font, bundled with the plugin (SIL Open Font License, `fonts/cairo/OFL.txt`), so it renders without a network request. It is light only, like tua.jo.
+
+The example app opens the screen from its home page. Its `TuaApi.checkoutBackend()` builds a `TuaRestBackend` from the `.env` tokens. That is fine for trying it out, but a real app uses its own login instead.
 
 ---
 

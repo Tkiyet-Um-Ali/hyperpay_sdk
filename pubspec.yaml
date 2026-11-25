@@ -1,6 +1,6 @@
 name: hyperpay_sdk
 description: "Flutter plugin for HyperPay (OPPWA) Mobile SDK v7.11.0. ReadyUI, CustomUI, Apple Pay, Google Pay, MADA, tokenization, and 3DS2."
-version: 2.6.1
+version: 2.7.0
 homepage: https://github.com/hrvojecukman/hyperpay_sdk
 repository: https://github.com/hrvojecukman/hyperpay_sdk
 issue_tracker: https://github.com/hrvojecukman/hyperpay_sdk/issues
@@ -33,3 +33,18 @@ flutter:
         pluginClass: HyperpaySdkPlugin
       ios:
         pluginClass: HyperpaySdkPlugin
+
+  # TUA checkout screen (package:hyperpay_sdk/tua_checkout.dart).
+  assets:
+    - assets/tua/
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: fonts/cairo/Cairo-Regular.ttf
+          weight: 400
+        - asset: fonts/cairo/Cairo-SemiBold.ttf
+          weight: 600
+        - asset: fonts/cairo/Cairo-Bold.ttf
+          weight: 700
+        - asset: fonts/cairo/Cairo-ExtraBold.ttf
+          weight: 800

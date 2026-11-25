@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 /// TUA design-system tokens, as used by the HyperPay Checkout Kit design.
 abstract final class TuaColors {
@@ -21,6 +20,10 @@ abstract final class TuaColors {
 }
 
 abstract final class TuaText {
+  /// Cairo, bundled with the plugin (SIL Open Font License).
+  static const fontFamily = 'Cairo';
+  static const fontPackage = 'hyperpay_sdk';
+
   static TextStyle cairo({
     double size = 15,
     FontWeight weight = FontWeight.w400,
@@ -28,15 +31,16 @@ abstract final class TuaText {
     double? height,
     double? letterSpacing,
     List<FontFeature>? features,
-  }) =>
-      GoogleFonts.cairo(
-        fontSize: size,
-        fontWeight: weight,
-        color: color,
-        height: height,
-        letterSpacing: letterSpacing,
-        fontFeatures: features,
-      );
+  }) => TextStyle(
+    fontFamily: fontFamily,
+    package: fontPackage,
+    fontSize: size,
+    fontWeight: weight,
+    color: color,
+    height: height,
+    letterSpacing: letterSpacing,
+    fontFeatures: features,
+  );
 
   static const tabular = [FontFeature.tabularFigures()];
 }
@@ -57,7 +61,7 @@ ThemeData tuaTheme(BuildContext context) {
       onSurface: TuaColors.ink,
     ),
     textTheme: base.textTheme.apply(
-      fontFamily: GoogleFonts.cairo().fontFamily,
+      fontFamily: 'packages/${TuaText.fontPackage}/${TuaText.fontFamily}',
       bodyColor: TuaColors.ink,
       displayColor: TuaColors.ink,
     ),
@@ -70,8 +74,11 @@ ThemeData tuaTheme(BuildContext context) {
       backgroundColor: TuaColors.hero,
       foregroundColor: Colors.white,
       elevation: 0,
-      titleTextStyle:
-          TuaText.cairo(size: 17, weight: FontWeight.w700, color: Colors.white),
+      titleTextStyle: TuaText.cairo(
+        size: 17,
+        weight: FontWeight.w700,
+        color: Colors.white,
+      ),
     ),
   );
 }

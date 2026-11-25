@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:hyperpay_sdk/tua_checkout.dart'
+    show TuaHttpResponse, TuaRestBackend;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -273,7 +275,8 @@ class TuaApi {
 
   /// Body of `POST /v1/donations/checkout`. Program and profile values come
   /// from `.env`.
-  static Map<String, dynamic> _checkoutBody() {
+  /// The donation body built from `.env`. A real app builds it from its cart.
+  static Map<String, dynamic> checkoutBody() {
     final quantity = int.tryParse(_env('TUA_QUANTITY')) ?? 1;
     String? orNull(String key) => _env(key).isEmpty ? null : _env(key);
     return {
@@ -354,10 +357,10 @@ class TuaApi {
 
   static Future<TuaCheckout> _postCheckout() async {
     final key = await idempotencyKey();
-    final response = await _send(
+    final response = await send(
       'POST',
       '/v1/donations/checkout',
-      body: _checkoutBody(),
+      body: checkoutBody(),
       headers: {'Idempotency-Key': key},
     );
     print('[TuaApi] Checkout ${response.statusCode} (Idempotency-Key: $key)');
@@ -459,7 +462,7 @@ class TuaApi {
       {String? locale}) async {
     final query = locale == null ? '' : '?locale=$locale';
     final response =
-        await _send('GET', '/v1/donations/payments/$paymentId$query');
+        await send('GET', '/v1/donations/payments/$paymentId$query');
     return TuaPaymentOutcome.fromMap(_decodeOrThrow(response));
   }
 
@@ -467,7 +470,7 @@ class TuaApi {
   /// card form is still open, or `null` once it is no longer `pending` (the
   /// backend only returns `hyperpay` while pending and before `expiresAt`).
   static Future<TuaCheckout?> resumePayment(String paymentId) async {
-    final response = await _send('GET', '/v1/donations/payments/$paymentId');
+    final response = await send('GET', '/v1/donations/payments/$paymentId');
     final data = _decodeOrThrow(response);
     if (data['hyperpay'] is! Map) return null;
     return _parseCheckout(data, response);
@@ -477,7 +480,7 @@ class TuaApi {
   /// for a `failed` payment (same items, amount and reference).
   static Future<TuaCheckout> retryPayment(String paymentId) async {
     final response =
-        await _send('POST', '/v1/donations/payments/$paymentId/retry');
+        await send('POST', '/v1/donations/payments/$paymentId/retry');
     final checkout = _parseCheckout(_decodeOrThrow(response), response);
     current = checkout;
     return checkout;
@@ -488,12 +491,13 @@ class TuaApi {
   /// `payments.payment_not_cancellable` once the payment was submitted.
   static Future<void> cancelPayment(String paymentId) async {
     final response =
-        await _send('POST', '/v1/donations/payments/$paymentId/cancel');
+        await send('POST', '/v1/donations/payments/$paymentId/cancel');
     _decodeOrThrow(response);
   }
 
   /// Sends an authenticated request, refreshing the access token once on 401.
-  static Future<http.Response> _send(
+  /// Authenticated request to the Tua backend (refreshes the token on 401).
+  static Future<http.Response> send(
     String method,
     String path, {
     Map<String, dynamic>? body,
@@ -566,6 +570,19 @@ class TuaApi {
       expiresAt: DateTime.tryParse(data['expiresAt']?.toString() ?? ''),
     );
   }
+
+  /// The backend for the plugin's `TuaCheckoutScreen`, using this class's
+  /// tokens. In your app, wrap your own authenticated API client the same
+  /// way.
+  static TuaRestBackend checkoutBackend() => TuaRestBackend(
+        checkoutBody: checkoutBody,
+        send: (method, path, {body, headers}) async {
+          final response = await send(method, path,
+              body: body, headers: headers ?? const {});
+          final data = _decode(response);
+          return TuaHttpResponse(response.statusCode, data);
+        },
+      );
 
   static Future<String>? _refreshing;
 
